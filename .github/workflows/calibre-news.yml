@@ -42,14 +42,15 @@ jobs:
           feed = feedparser.parse(rss_url)
           
           now = datetime.now()
-          date_str = now.strftime('%Y年%m月%d日 %H:%M')
+          date_str = now.strftime('%Y-%m-%d %H:%M')
+          title_date = now.strftime('%Y-%m-%d %H:%M')
           
           html = f"""<!DOCTYPE html>
           <html>
-          <head><meta charset="UTF-8"><title>纽约时报新闻 - {date_str}</title></head>
+          <head><meta charset="UTF-8"><title>纽约时报 - {date_str}</title></head>
           <body>
           <div style="text-align:center; padding:40px 0; border-bottom:2px solid #ccc;">
-              <h1>纽约时报新闻</h1>
+              <h1>纽约时报</h1>
               <p style="color:#666; font-size:16px;">{date_str}</p>
               <p>共 {len(feed.entries)} 篇文章</p>
           </div>
@@ -83,7 +84,6 @@ jobs:
               else:
                   pub_date = ''
               
-              # 获取作者
               author = entry.get('author', '')
               if not author and 'dc:creator' in entry:
                   author = entry.get('dc:creator', '')
@@ -107,7 +107,7 @@ jobs:
           with open('news.html', 'w', encoding='utf-8') as f:
               f.write(html)
           
-          # 发送邮件
+          # 发送邮件 - 主题改成你想要的格式
           smtp_server = os.environ.get('SMTP')
           port = int(os.environ.get('PORT'))
           username = os.environ.get('FROM')
@@ -117,7 +117,7 @@ jobs:
           msg = MIMEMultipart()
           msg['From'] = username
           msg['To'] = to
-          msg['Subject'] = f'纽约时报新闻 - {date_str}'
+          msg['Subject'] = f'纽约时报 - {title_date}'   # 这里改了！
           
           with open('news.html', 'rb') as f:
               part = MIMEBase('application', 'octet-stream')
