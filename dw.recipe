@@ -12,9 +12,12 @@ class AdvancedUserRecipe1281929028(BasicNewsRecipe):
     oldest_article = 1
     max_articles_per_feed = 15
     
-    no_summaries = True
+    # 新增的三个设置
+    no_stylesheets = True
     use_embedded_content = True
+    remove_javascript = True
     
+    # 删除垃圾标签
     remove_tags = [
         dict(name='hr'),
         dict(name='a', attrs={'href': re.compile(r'.*feedx.*')}),
@@ -22,6 +25,7 @@ class AdvancedUserRecipe1281929028(BasicNewsRecipe):
         dict(name='style'),
     ]
     
+    # 清理正文
     def preprocess_html(self, soup):
         for a in soup.find_all('a'):
             if 'feedx' in a.get('href', ''):
@@ -31,6 +35,7 @@ class AdvancedUserRecipe1281929028(BasicNewsRecipe):
                 div.decompose()
         return soup
     
+    # 改成 RSSHub 全文地址
     feeds = [
-        ('德国之声', 'https://feedx.net/rss/dw.xml'),
+        ('德国之声', 'https://rsshub.app/dw/zh?mode=fulltext'),
     ]
