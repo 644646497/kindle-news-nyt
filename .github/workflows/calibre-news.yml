@@ -6,14 +6,14 @@ class AdvancedUserRecipe(BasicNewsRecipe):
     language = 'zh_CN'
     oldest_article = 1
     max_articles_per_feed = 20
+    
     no_stylesheets = True
     use_embedded_content = False
     remove_javascript = True
     auto_cleanup = True
     remove_empty_feeds = True
 
-    # 只显示标题列表
-    summary_length = 0
+    summary_length = 0          # 不显示摘要
     description = '纽约时报每日更新'
 
     def get_cover_url(self):
@@ -25,15 +25,13 @@ class AdvancedUserRecipe(BasicNewsRecipe):
 
     def parse_index(self):
         articles = []
-        feed = self.feeds[0][1]
-        parsed = self.parse_feed(feed)
+        parsed = self.parse_feed(self.feeds[0][1])
         
         for i, article in enumerate(parsed.articles[:20], 1):
             articles.append({
                 'title': f"{i:02d}. {article.title.strip()}",
                 'url': article.url,
-                'date': article.date,
-                'description': ''          # 强制清空摘要
+                'description': ''          # 清空摘要
             })
         
         return [('今日新闻目录', articles)]
