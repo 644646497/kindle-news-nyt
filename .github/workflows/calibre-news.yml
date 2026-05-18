@@ -33,40 +33,77 @@ jobs:
           import feedparser
           import smtplib
           import os
-          from email.mime.text import MIMEText
           from email.mime.multipart import MIMEMultipart
+          from email.mime.base import MIMEBase
+          from email import encoders
           from datetime import datetime
           
-          # RSS 地址
           rss_url = "https://raw.githubusercontent.com/644646497/rss/main/feed.xml"
-          
-          print(f"抓取 RSS: {rss_url}")
           feed = feedparser.parse(rss_url)
-          print(f"找到 {len(feed.entries)} 篇文章")
           
-          # 生成 HTML
+          now = datetime.now()
+          date_str = now.strftime('%Y年%m月%d日 %H:%M')
+          
           html = f"""<!DOCTYPE html>
           <html>
-          <head><meta charset="UTF-8"><title>纽约时报新闻</title></head>
+          <head><meta charset="UTF-8"><title>纽约时报新闻 - {date_str}</title></head>
           <body>
-          <h1>纽约时报新闻 - {datetime.now().strftime('%Y-%m-%d %H:%M')}</h1>
+          <div style="text-align:center; padding:40px 0; border-bottom:2px solid #ccc;">
+              <h1>纽约时报新闻</h1>
+              <p style="color:#666; font-size:16px;">{date_str}</p>
+              <p>共 {len(feed.entries)} 篇文章</p>
+          </div>
+          
+          <div style="margin:30px 0; padding:20px; background:#f5f5f5;">
+              <h2>📑 目录</h2>
+              <ul style="font-size:18px; line-height:1.8;">
+          """
+          
+          for i, entry in enumerate(feed.entries[:15], 1):
+              title = entry.get('title', '无标题')
+              html += f'              <li><a href="#article{i}">{title}</a></li>\n'
+          
+          html += """              </ul>
+          </div>
+          
           <hr/>
           """
           
-          for entry in feed.entries[:10]:
+          for i, entry in enumerate(feed.entries[:15], 1):
               title = entry.get('title', '无标题')
               link = entry.get('link', '#')
-              # 获取摘要或正文
               summary = entry.get('summary', entry.get('description', ''))
+              pub_date = entry.get('published', '')
+              if pub_date:
+                  try:
+                      dt = datetime.strptime(pub_date[:19], '%Y-%m-%d %H:%M:%S')
+                      pub_date = dt.strftime('%Y-%m-%d %H:%M')
+                  except:
+                      pass
+              else:
+                  pub_date = ''
+              
+              # 获取作者
+              author = entry.get('author', '')
+              if not author and 'dc:creator' in entry:
+                  author = entry.get('dc:creator', '')
+              if not author:
+                  author = '纽约时报'
+              
               html += f"""
-              <h2><a href="{link}">{title}</a></h2>
-              <div>{summary}</div>
-              <hr/>
-              """
+          <div id="article{i}" style="margin:40px 0; padding:20px; border-bottom:1px solid #eee;">
+              <h2><a href="{link}" style="color:#333; text-decoration:none;">{title}</a></h2>
+              <div style="color:#888; font-size:14px; margin:10px 0;">
+                  📅 时间: {pub_date} &nbsp;|&nbsp; ✍️ 作者: {author}
+              </div>
+              <div style="color:#666; font-size:14px;">原文链接: <a href="{link}">{link}</a></div>
+              <div style="margin:15px 0; line-height:1.6;">{summary}</div>
+              <div style="margin-top:15px;"><a href="#top" style="color:#999;">↑ 返回顶部</a></div>
+          </div>
+          """
           
-          html += "</body></html>"
+          html += "<div style='text-align:center; padding:40px; color:#999;'>生成时间: {}</div></body></html>".format(datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
           
-          # 保存 HTML 文件
           with open('news.html', 'w', encoding='utf-8') as f:
               f.write(html)
           
@@ -77,14 +114,10 @@ jobs:
           password = os.environ.get('SECRET')
           to = os.environ.get('TO')
           
-          msg = MIMEMultipart('alternative')
+          msg = MIMEMultipart()
           msg['From'] = username
           msg['To'] = to
-          msg['Subject'] = f'纽约时报新闻 - {datetime.now().strftime("%Y-%m-%d %H:%M")}'
-          
-          # 附件方式发送 HTML
-          from email.mime.base import MIMEBase
-          from email import encoders
+          msg['Subject'] = f'纽约时报新闻 - {date_str}'
           
           with open('news.html', 'rb') as f:
               part = MIMEBase('application', 'octet-stream')
@@ -97,5 +130,5 @@ jobs:
               server.login(username, password)
               server.send_message(msg)
           
-          print(f"✅ 发送成功！共 {len(feed.entries[:10])} 篇文章")
+          print(f"✅ 发送成功！共 {len(feed.entries[:15])} 篇文章")
           EOF
