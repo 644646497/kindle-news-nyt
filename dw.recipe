@@ -1,0 +1,36 @@
+import os
+import time
+import re
+import datetime
+
+os.environ['TZ'] = 'Asia/Shanghai'
+time.tzset()
+
+class AdvancedUserRecipe1281929028(BasicNewsRecipe):
+    title = datetime.datetime.now().strftime('德国之声 - %Y-%m-%d %H-%M')
+    language = 'zh_CN'
+    oldest_article = 1
+    max_articles_per_feed = 15
+    
+    no_summaries = True
+    use_embedded_content = True
+    
+    remove_tags = [
+        dict(name='hr'),
+        dict(name='a', attrs={'href': re.compile(r'.*feedx.*')}),
+        dict(name='script'),
+        dict(name='style'),
+    ]
+    
+    def preprocess_html(self, soup):
+        for a in soup.find_all('a'):
+            if 'feedx' in a.get('href', ''):
+                a.decompose()
+        for div in soup.find_all('div'):
+            if '获取更多RSS' in div.get_text():
+                div.decompose()
+        return soup
+    
+    feeds = [
+        ('德国之声', 'https://feedx.net/rss/dw.xml'),
+    ]
