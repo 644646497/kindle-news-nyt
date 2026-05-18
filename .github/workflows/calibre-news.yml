@@ -1,37 +1,50 @@
-import datetime
-from calibre.web.feeds.news import BasicNewsRecipe
+name: Send to Kindle
 
-class AdvancedUserRecipe(BasicNewsRecipe):
-    title = '纽约时报'
-    language = 'zh_CN'
-    oldest_article = 1
-    max_articles_per_feed = 20
-    
-    no_stylesheets = True
-    use_embedded_content = False
-    remove_javascript = True
-    auto_cleanup = True
-    remove_empty_feeds = True
+on:
+  schedule:
+    - cron: '0 13 * * *'
+  workflow_dispatch:
 
-    summary_length = 0          # 不显示摘要
-    description = '纽约时报每日更新'
+jobs:
+  send:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
 
-    def get_cover_url(self):
-        return None
+      - name: Install Calibre
+        run: sudo apt-get update && sudo apt-get install -y calibre
 
-    feeds = [
-        ('纽约时报', 'https://raw.githubusercontent.com/644646497/rss/main/feed.xml'),
-    ]
-
-    def parse_index(self):
-        articles = []
-        parsed = self.parse_feed(self.feeds[0][1])
-        
-        for i, article in enumerate(parsed.articles[:20], 1):
-            articles.append({
-                'title': f"{i:02d}. {article.title.strip()}",
-                'url': article.url,
-                'description': ''          # 清空摘要
-            })
-        
-        return [('今日新闻目录', articles)]
+      - name: Generate and Send
+        env:
+          FROM: ${{ secrets.FROM }}
+          TO: ${{ secrets.TO }}
+          SMTP: ${{ secrets.SMTP }}
+          PORT: ${{ secrets.PORT }}
+          SECRET: ${{ secrets.SECRET }}
+        run: |
+          ebook-convert nytimes.recipe nytimes.epub --output-profile kindle
+          
+          python3 -c '
+          import smtplib, os
+          from email.mime.multipart import MIMEMultipart
+          from email.mime.base import MIMEBase
+          from email import encoders
+          from datetime import datetime
+          
+          msg = MIMEMultipart()
+          msg["From"] = os.environ["FROM"]
+          msg["To"] = os.environ["TO"]
+          msg["Subject"] = f"纽约时报 {datetime.now().strftime("%Y-%m-%d")}"
+          
+          with open("nytimes.epub", "rb") as f:
+              part = MIMEBase("application", "epub+zip")
+              part.set_payload(f.read())
+              encoders.encode_base64(part)
+              part.add_header("Content-Disposition", "attachment", filename="纽约时报.epub")
+              msg.attach(part)
+          
+          with smtplib.SMTP_SSL(os.environ["SMTP"], int(os.environ["PORT"])) as server:
+              server.login(os.environ["FROM"], os.environ["SECRET"])
+              server.send_message(msg)
+          print("发送完成")
+          '
