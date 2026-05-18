@@ -1,4 +1,3 @@
-import os
 import datetime
 from calibre.web.feeds.news import BasicNewsRecipe
 
@@ -6,15 +5,16 @@ class AdvancedUserRecipe(BasicNewsRecipe):
     title = '纽约时报'
     language = 'zh_CN'
     oldest_article = 1
-    max_articles_per_feed = 15
+    max_articles_per_feed = 20
     no_stylesheets = True
     use_embedded_content = False
     remove_javascript = True
     auto_cleanup = True
+    remove_empty_feeds = True
 
-    # 只保留标题列表，不显示正文
+    # 只显示标题列表
     summary_length = 0
-    description = '纽约时报每日精选'
+    description = '纽约时报每日更新'
 
     def get_cover_url(self):
         return None
@@ -24,16 +24,16 @@ class AdvancedUserRecipe(BasicNewsRecipe):
     ]
 
     def parse_index(self):
-        # 强制只显示标题列表
         articles = []
         feed = self.feeds[0][1]
         parsed = self.parse_feed(feed)
         
-        for article in parsed.articles[:15]:
+        for i, article in enumerate(parsed.articles[:20], 1):
             articles.append({
-                'title': article.title,
+                'title': f"{i:02d}. {article.title.strip()}",
                 'url': article.url,
                 'date': article.date,
-                'description': ''   # 清空摘要
+                'description': ''          # 强制清空摘要
             })
-        return [('今日要闻', articles)]
+        
+        return [('今日新闻目录', articles)]
