@@ -17,9 +17,12 @@ jobs:
           python-version: '3.11'
       
       - name: Install dependencies
-        run: pip install requests feedparser
-        
-      - name: Generate HTML and send email
+        run: |
+          pip install requests feedparser
+          sudo apt-get update
+          sudo apt-get install -y pandoc
+      
+      - name: Generate EPUB and send email
         env:
           FROM: ${{ secrets.FROM }}
           TO: ${{ secrets.TO }}
@@ -33,6 +36,7 @@ jobs:
           import feedparser
           import smtplib
           import os
+          import subprocess
           from email.mime.multipart import MIMEMultipart
           from email.mime.base import MIMEBase
           from email import encoders
@@ -43,71 +47,51 @@ jobs:
           
           now = datetime.now()
           date_str = now.strftime('%Y-%m-%d %H:%M')
-          title_date = now.strftime('%Y-%m-%d %H:%M')
           
+          # 生成 HTML
           html = f"""<!DOCTYPE html>
           <html>
           <head><meta charset="UTF-8"><title>纽约时报 - {date_str}</title></head>
           <body>
-          <div style="text-align:center; padding:40px 0; border-bottom:2px solid #ccc;">
-              <h1>纽约时报</h1>
-              <p style="color:#666; font-size:16px;">{date_str}</p>
-              <p>共 {len(feed.entries)} 篇文章</p>
-          </div>
-          
-          <div style="margin:30px 0; padding:20px; background:#f5f5f5;">
-              <h2>📑 目录</h2>
-              <ul style="font-size:18px; line-height:1.8;">
+          <h1>纽约时报</h1>
+          <p>{date_str}</p>
+          <h2>目录</h2>
+          <ul>
           """
           
           for i, entry in enumerate(feed.entries[:15], 1):
               title = entry.get('title', '无标题')
-              html += f'              <li><a href="#article{i}">{title}</a></li>\n'
+              html += f'<li><a href="#article{i}">{title}</a></li>\n'
           
-          html += """              </ul>
-          </div>
-          
-          <hr/>
-          """
+          html += "</ul><hr/>"
           
           for i, entry in enumerate(feed.entries[:15], 1):
               title = entry.get('title', '无标题')
               link = entry.get('link', '#')
               summary = entry.get('summary', entry.get('description', ''))
               pub_date = entry.get('published', '')
-              if pub_date:
-                  try:
-                      dt = datetime.strptime(pub_date[:19], '%Y-%m-%d %H:%M:%S')
-                      pub_date = dt.strftime('%Y-%m-%d %H:%M')
-                  except:
-                      pass
-              else:
-                  pub_date = ''
-              
-              author = entry.get('author', '')
-              if not author and 'dc:creator' in entry:
-                  author = entry.get('dc:creator', '')
-              if not author:
-                  author = '纽约时报'
+              author = entry.get('author', '纽约时报')
               
               html += f"""
-          <div id="article{i}" style="margin:40px 0; padding:20px; border-bottom:1px solid #eee;">
-              <h2><a href="{link}" style="color:#333; text-decoration:none;">{title}</a></h2>
-              <div style="color:#888; font-size:14px; margin:10px 0;">
-                  📅 时间: {pub_date} &nbsp;|&nbsp; ✍️ 作者: {author}
-              </div>
-              <div style="color:#666; font-size:14px;">原文链接: <a href="{link}">{link}</a></div>
-              <div style="margin:15px 0; line-height:1.6;">{summary}</div>
-              <div style="margin-top:15px;"><a href="#top" style="color:#999;">↑ 返回顶部</a></div>
+          <div id="article{i}">
+              <h2>{title}</h2>
+              <p>时间: {pub_date} | 作者: {author}</p>
+              <p>原文: <a href="{link}">{link}</a></p>
+              <div>{summary}</div>
+              <p><a href="#top">返回顶部</a></p>
+              <hr/>
           </div>
           """
           
-          html += "<div style='text-align:center; padding:40px; color:#999;'>生成时间: {}</div></body></html>".format(datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
+          html += "</body></html>"
           
           with open('news.html', 'w', encoding='utf-8') as f:
               f.write(html)
           
-          # 发送邮件 - 主题改成你想要的格式
+          # 用 pandoc 转换成 EPUB
+          subprocess.run(['pandoc', 'news.html', '-o', 'news.epub', '--metadata', f'title=纽约时报', '--metadata', f'date={date_str}'], check=True)
+          
+          # 发送邮件
           smtp_server = os.environ.get('SMTP')
           port = int(os.environ.get('PORT'))
           username = os.environ.get('FROM')
@@ -117,13 +101,13 @@ jobs:
           msg = MIMEMultipart()
           msg['From'] = username
           msg['To'] = to
-          msg['Subject'] = f'纽约时报 - {title_date}'   # 这里改了！
+          msg['Subject'] = f'纽约时报 - {date_str}'
           
-          with open('news.html', 'rb') as f:
-              part = MIMEBase('application', 'octet-stream')
+          with open('news.epub', 'rb') as f:
+              part = MIMEBase('application', 'epub+zip')
               part.set_payload(f.read())
               encoders.encode_base64(part)
-              part.add_header('Content-Disposition', 'attachment', filename='news.html')
+              part.add_header('Content-Disposition', 'attachment', filename='news.epub')
               msg.attach(part)
           
           with smtplib.SMTP_SSL(smtp_server, port) as server:
