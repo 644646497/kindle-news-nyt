@@ -1,4 +1,4 @@
-name: Calibre News Delivery
+name: 发送纽约时报新闻
 
 on:
   schedule:
@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
 
 jobs:
-  worker:
+  send:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -16,14 +16,10 @@ jobs:
         with:
           python-version: '3.11'
       
-      - name: Install Calibre
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libegl1 libopengl0
-          sudo -v
-          wget -nv -O- https://download.calibre-ebook.com/linux-installer.sh | sudo sh /dev/stdin
+      - name: Install dependencies
+        run: pip install requests beautifulsoup4 feedparser
       
-      - name: Send to Kindle
+      - name: Generate and send news
         env:
           FROM: ${{ secrets.FROM }}
           TO: ${{ secrets.TO }}
@@ -32,11 +28,58 @@ jobs:
           ENCRYPT: ${{ secrets.ENCRYPT }}
           SECRET: ${{ secrets.SECRET }}
         run: |
-          for recipe in recipe_list.txt; do
-            if [ -f "$recipe" ]; then
-              ebook-convert "$recipe" .epub --output-profile kindle -vv
-            fi
-          done
-          for epub in *.epub; do
-            calibre-smtp --relay ${{ env.SMTP }} --port ${{ env.PORT }} --username ${{ env.FROM }} --password ${{ env.SECRET }} --encryption-method ${{ env.ENCRYPT }} ${{ env.FROM }} ${{ env.TO }} "$epub" "News"
-          done
+          python3 << 'EOF'
+          import requests
+          import feedparser
+          import smtplib
+          import os
+          from email.mime.text import MIMEText
+          from email.mime.multipart import MIMEMultipart
+          from datetime import datetime
+          
+          # 抓取 RSS
+          rss_url = "https://feedx.net/rss/nytimes.xml"
+          feed = feedparser.parse(rss_url)
+          
+          # 生成 HTML 内容
+          html = f"""
+          <html>
+          <head><meta charset="UTF-8"></head>
+          <body>
+          <h1>纽约时报新闻 - {datetime.now().strftime('%Y-%m-%d %H:%M')}</h1>
+          <hr/>
+          """
+          
+          for entry in feed.entries[:10]:
+              title = entry.get('title', '无标题')
+              link = entry.get('link', '#')
+              summary = entry.get('summary', '')
+              html += f"""
+              <h2><a href="{link}">{title}</a></h2>
+              <p>{summary}</p>
+              <hr/>
+              """
+          
+          html += "</body></html>"
+          
+          # 发送邮件
+          smtp_server = os.environ.get('SMTP')
+          port = int(os.environ.get('PORT'))
+          username = os.environ.get('FROM')
+          password = os.environ.get('SECRET')
+          to = os.environ.get('TO')
+          
+          msg = MIMEMultipart('alternative')
+          msg['From'] = username
+          msg['To'] = to
+          msg['Subject'] = f'纽约时报新闻 - {datetime.now().strftime("%Y-%m-%d %H:%M")}'
+          
+          part = MIMEText(html, 'html', 'utf-8')
+          msg.attach(part)
+          
+          with smtplib.SMTP_SSL(smtp_server, port) as server:
+              server.login(username, password)
+              server.send_message(msg)
+          
+          print(f"✅ 发送成功！共 {len(feed.entries[:10])} 篇文章")
+          EOF
