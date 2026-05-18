@@ -2,7 +2,7 @@ name: Send News to Kindle (NYTimes)
 
 on:
   schedule:
-    - cron: '0 13 * * *'    # 北京时间晚上9点（可自行修改）
+    - cron: '0 13 * * *'    # 北京时间晚上 9 点
   workflow_dispatch:
 
 jobs:
@@ -34,18 +34,16 @@ jobs:
           from email import encoders
           from datetime import datetime
 
-          print("开始生成纽约时报 EPUB...")
+          print("=== 开始生成纽约时报 EPUB ===")
 
           # 生成 EPUB
           try:
-              result = subprocess.run([
-                  'ebook-convert', 
-                  'nytimes.recipe', 
+              subprocess.run([
+                  'ebook-convert',
+                  'nytimes.recipe',
                   'nytimes.epub',
-                  '--output-profile', 'kindle',
-                  '--title', f'纽约时报 {datetime.now().strftime("%Y-%m-%d")}',
-                  '--max-recursion-depth', '2'
-              ], capture_output=True, text=True, check=True)
+                  '--output-profile', 'kindle'
+              ], check=True, capture_output=True, text=True)
               
               print("✅ EPUB 生成成功")
           except subprocess.CalledProcessError as e:
@@ -53,7 +51,7 @@ jobs:
               print(e.stderr)
               exit(1)
 
-          # 检查文件大小
+          # 检查文件
           size = os.path.getsize('nytimes.epub') / 1024
           print(f"EPUB 文件大小: {size:.1f} KB")
 
