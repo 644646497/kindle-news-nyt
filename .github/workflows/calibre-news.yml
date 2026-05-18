@@ -1,85 +1,39 @@
-name: Send News to Kindle (NYTimes)
+import os
+import datetime
+from calibre.web.feeds.news import BasicNewsRecipe
 
-on:
-  schedule:
-    - cron: '0 13 * * *'    # 北京时间晚上 9 点
-  workflow_dispatch:
+class AdvancedUserRecipe(BasicNewsRecipe):
+    title = '纽约时报'
+    language = 'zh_CN'
+    oldest_article = 1
+    max_articles_per_feed = 15
+    no_stylesheets = True
+    use_embedded_content = False
+    remove_javascript = True
+    auto_cleanup = True
 
-jobs:
-  send:
-    runs-on: ubuntu-latest
+    # 只保留标题列表，不显示正文
+    summary_length = 0
+    description = '纽约时报每日精选'
 
-    steps:
-      - uses: actions/checkout@v4
+    def get_cover_url(self):
+        return None
 
-      - name: Install Calibre
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y calibre
+    feeds = [
+        ('纽约时报', 'https://raw.githubusercontent.com/644646497/rss/main/feed.xml'),
+    ]
 
-      - name: Generate EPUB and Send to Kindle
-        env:
-          FROM: ${{ secrets.FROM }}
-          TO: ${{ secrets.TO }}
-          SMTP: ${{ secrets.SMTP }}
-          PORT: ${{ secrets.PORT }}
-          SECRET: ${{ secrets.SECRET }}
-        run: |
-          python3 << 'EOF'
-          import subprocess
-          import smtplib
-          import os
-          from email.mime.multipart import MIMEMultipart
-          from email.mime.base import MIMEBase
-          from email import encoders
-          from datetime import datetime
-
-          print("=== 开始生成纽约时报 EPUB ===")
-
-          # 生成 EPUB
-          try:
-              subprocess.run([
-                  'ebook-convert',
-                  'nytimes.recipe',
-                  'nytimes.epub',
-                  '--output-profile', 'kindle'
-              ], check=True, capture_output=True, text=True)
-              
-              print("✅ EPUB 生成成功")
-          except subprocess.CalledProcessError as e:
-              print("❌ EPUB 生成失败:")
-              print(e.stderr)
-              exit(1)
-
-          # 检查文件
-          size = os.path.getsize('nytimes.epub') / 1024
-          print(f"EPUB 文件大小: {size:.1f} KB")
-
-          if size < 100:
-              print("⚠️ EPUB 文件过小，可能生成失败")
-              exit(1)
-
-          # 发送邮件
-          try:
-              msg = MIMEMultipart()
-              msg['From'] = os.environ['FROM']
-              msg['To'] = os.environ['TO']
-              msg['Subject'] = f'纽约时报 {datetime.now().strftime("%Y-%m-%d")}'
-
-              with open('nytimes.epub', 'rb') as f:
-                  part = MIMEBase('application', 'epub+zip')
-                  part.set_payload(f.read())
-                  encoders.encode_base64(part)
-                  part.add_header('Content-Disposition', 'attachment', filename='nytimes.epub')
-                  msg.attach(part)
-
-              with smtplib.SMTP_SSL(os.environ['SMTP'], int(os.environ['PORT'])) as server:
-                  server.login(os.environ['FROM'], os.environ['SECRET'])
-                  server.send_message(msg)
-
-              print("✅ 邮件发送成功！请检查 Kindle 设备")
-          except Exception as e:
-              print(f"❌ 邮件发送失败: {e}")
-              import traceback
-              traceback.print_exc()
-          EOF
+    def parse_index(self):
+        # 强制只显示标题列表
+        articles = []
+        feed = self.feeds[0][1]
+        parsed = self.parse_feed(feed)
+        
+        for article in parsed.articles[:15]:
+            articles.append({
+                'title': article.title,
+                'url': article.url,
+                'date': article.date,
+                'description': ''   # 清空摘要
+            })
+        return [('今日要闻', articles)]
