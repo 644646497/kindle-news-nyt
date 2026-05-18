@@ -1,4 +1,4 @@
-name: 发送纽约时报新闻
+name: Send News to Kindle
 
 on:
   schedule:
@@ -17,9 +17,9 @@ jobs:
           python-version: '3.11'
       
       - name: Install dependencies
-        run: pip install requests beautifulsoup4 feedparser
-      
-      - name: Generate and send news
+        run: pip install requests feedparser
+        
+      - name: Generate HTML and send email
         env:
           FROM: ${{ secrets.FROM }}
           TO: ${{ secrets.TO }}
@@ -37,14 +37,17 @@ jobs:
           from email.mime.multipart import MIMEMultipart
           from datetime import datetime
           
-          # 抓取 RSS
-          rss_url = "https://feedx.net/rss/nytimes.xml"
-          feed = feedparser.parse(rss_url)
+          # RSS 地址
+          rss_url = "https://raw.githubusercontent.com/644646497/rss/main/feed.xml"
           
-          # 生成 HTML 内容
-          html = f"""
+          print(f"抓取 RSS: {rss_url}")
+          feed = feedparser.parse(rss_url)
+          print(f"找到 {len(feed.entries)} 篇文章")
+          
+          # 生成 HTML
+          html = f"""<!DOCTYPE html>
           <html>
-          <head><meta charset="UTF-8"></head>
+          <head><meta charset="UTF-8"><title>纽约时报新闻</title></head>
           <body>
           <h1>纽约时报新闻 - {datetime.now().strftime('%Y-%m-%d %H:%M')}</h1>
           <hr/>
@@ -53,14 +56,19 @@ jobs:
           for entry in feed.entries[:10]:
               title = entry.get('title', '无标题')
               link = entry.get('link', '#')
-              summary = entry.get('summary', '')
+              # 获取摘要或正文
+              summary = entry.get('summary', entry.get('description', ''))
               html += f"""
               <h2><a href="{link}">{title}</a></h2>
-              <p>{summary}</p>
+              <div>{summary}</div>
               <hr/>
               """
           
           html += "</body></html>"
+          
+          # 保存 HTML 文件
+          with open('news.html', 'w', encoding='utf-8') as f:
+              f.write(html)
           
           # 发送邮件
           smtp_server = os.environ.get('SMTP')
@@ -74,8 +82,16 @@ jobs:
           msg['To'] = to
           msg['Subject'] = f'纽约时报新闻 - {datetime.now().strftime("%Y-%m-%d %H:%M")}'
           
-          part = MIMEText(html, 'html', 'utf-8')
-          msg.attach(part)
+          # 附件方式发送 HTML
+          from email.mime.base import MIMEBase
+          from email import encoders
+          
+          with open('news.html', 'rb') as f:
+              part = MIMEBase('application', 'octet-stream')
+              part.set_payload(f.read())
+              encoders.encode_base64(part)
+              part.add_header('Content-Disposition', 'attachment', filename='news.html')
+              msg.attach(part)
           
           with smtplib.SMTP_SSL(smtp_server, port) as server:
               server.login(username, password)
