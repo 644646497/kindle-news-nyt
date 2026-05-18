@@ -1,34 +1,9 @@
-name: Send News to Kindle
-
-on:
-  schedule:
-    - cron: '0 12 * * *'
-  workflow_dispatch:
-
-jobs:
-  send:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-      
-      - name: Install dependencies
-        run: |
-          pip install requests feedparser
-          sudo apt-get update
-          sudo apt-get install -y pandoc
-      
       - name: Generate EPUB and send email
         env:
           FROM: ${{ secrets.FROM }}
           TO: ${{ secrets.TO }}
           SMTP: ${{ secrets.SMTP }}
           PORT: ${{ secrets.PORT }}
-          ENCRYPT: ${{ secrets.ENCRYPT }}
           SECRET: ${{ secrets.SECRET }}
         run: |
           python3 << 'EOF'
@@ -41,78 +16,92 @@ jobs:
           from email.mime.base import MIMEBase
           from email import encoders
           from datetime import datetime
-          
+
           rss_url = "https://raw.githubusercontent.com/644646497/rss/main/feed.xml"
           feed = feedparser.parse(rss_url)
-          
+
+          print(f"✅ 成功获取 RSS，共 {len(feed.entries)} 条文章")
+
           now = datetime.now()
           date_str = now.strftime('%Y-%m-%d %H:%M')
-          
+
           # 生成 HTML
           html = f"""<!DOCTYPE html>
           <html>
           <head><meta charset="UTF-8"><title>纽约时报 - {date_str}</title></head>
           <body>
-          <h1>纽约时报</h1>
-          <p>{date_str}</p>
-          <h2>目录</h2>
-          <ul>
+          <h1>纽约时报中文版 {date_str}</h1>
+          <hr/>
           """
-          
-          for i, entry in enumerate(feed.entries[:15], 1):
-              title = entry.get('title', '无标题')
-              html += f'<li><a href="#article{i}">{title}</a></li>\n'
-          
-          html += "</ul><hr/>"
-          
-          for i, entry in enumerate(feed.entries[:15], 1):
+
+          for i, entry in enumerate(feed.entries[:12], 1):   # 限制12条，避免太大
               title = entry.get('title', '无标题')
               link = entry.get('link', '#')
-              summary = entry.get('summary', entry.get('description', ''))
-              pub_date = entry.get('published', '')
-              author = entry.get('author', '纽约时报')
-              
+              content = entry.get('content', [{}])[0].get('value') or \
+                       entry.get('summary', entry.get('description', '无内容'))
+
               html += f"""
-          <div id="article{i}">
-              <h2>{title}</h2>
-              <p>时间: {pub_date} | 作者: {author}</p>
-              <p>原文: <a href="{link}">{link}</a></p>
-              <div>{summary}</div>
-              <p><a href="#top">返回顶部</a></p>
-              <hr/>
-          </div>
+          <h2>{i}. {title}</h2>
+          <p><small>原文链接: <a href="{link}">{link}</a></small></p>
+          <div>{content}</div>
+          <hr/>
           """
-          
+
           html += "</body></html>"
-          
+
           with open('news.html', 'w', encoding='utf-8') as f:
               f.write(html)
-          
-          # 用 pandoc 转换成 EPUB
-          subprocess.run(['pandoc', 'news.html', '-o', 'news.epub', '--metadata', f'title=纽约时报', '--metadata', f'date={date_str}'], check=True)
-          
+
+          print("✅ HTML 生成完成")
+
+          # Pandoc 转 EPUB（增加错误捕获）
+          try:
+              result = subprocess.run([
+                  'pandoc', 'news.html', '-o', 'news.epub',
+                  '--metadata', f'title=纽约时报 {date_str}',
+                  '--metadata', f'date={date_str}',
+                  '--toc'
+              ], capture_output=True, text=True, check=True)
+              print("✅ EPUB 转换成功")
+          except subprocess.CalledProcessError as e:
+              print("❌ Pandoc 转换失败:")
+              print(e.stderr)
+              exit(1)
+
+          # 检查 EPUB 文件大小
+          epub_size = os.path.getsize('news.epub')
+          print(f"✅ EPUB 文件大小: {epub_size / 1024:.1f} KB")
+
+          if epub_size < 5000:
+              print("⚠️ 警告：EPUB 文件过小，可能内容为空")
+
           # 发送邮件
-          smtp_server = os.environ.get('SMTP')
-          port = int(os.environ.get('PORT'))
-          username = os.environ.get('FROM')
-          password = os.environ.get('SECRET')
-          to = os.environ.get('TO')
-          
-          msg = MIMEMultipart()
-          msg['From'] = username
-          msg['To'] = to
-          msg['Subject'] = f'纽约时报 - {date_str}'
-          
-          with open('news.epub', 'rb') as f:
-              part = MIMEBase('application', 'epub+zip')
-              part.set_payload(f.read())
-              encoders.encode_base64(part)
-              part.add_header('Content-Disposition', 'attachment', filename='news.epub')
-              msg.attach(part)
-          
-          with smtplib.SMTP_SSL(smtp_server, port) as server:
-              server.login(username, password)
-              server.send_message(msg)
-          
-          print(f"✅ 发送成功！共 {len(feed.entries[:15])} 篇文章")
+          try:
+              smtp_server = os.environ.get('SMTP')
+              port = int(os.environ.get('PORT', 465))
+              username = os.environ.get('FROM')
+              password = os.environ.get('SECRET')
+              to = os.environ.get('TO')
+
+              msg = MIMEMultipart()
+              msg['From'] = username
+              msg['To'] = to
+              msg['Subject'] = f'纽约时报 - {date_str}'
+
+              with open('news.epub', 'rb') as f:
+                  part = MIMEBase('application', 'epub+zip')
+                  part.set_payload(f.read())
+                  encoders.encode_base64(part)
+                  part.add_header('Content-Disposition', 'attachment', filename='nytimes.epub')
+                  msg.attach(part)
+
+              with smtplib.SMTP_SSL(smtp_server, port) as server:
+                  server.login(username, password)
+                  server.send_message(msg)
+
+              print("✅ 邮件发送成功！")
+          except Exception as e:
+              print(f"❌ 邮件发送失败: {e}")
+              import traceback
+              traceback.print_exc()
           EOF
