@@ -1,0 +1,40 @@
+name: Calibre News Delivery
+
+on:
+  schedule:
+    - cron: '0 12 * * *'
+  workflow_dispatch:
+
+jobs:
+  worker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      
+      - name: Install Calibre
+        run: |
+          sudo -v
+          wget -nv -O- https://download.calibre-ebook.com/linux-installer.sh | sudo sh /dev/stdin
+      
+      - name: Send to Kindle
+        env:
+          FROM: ${{ secrets.FROM }}
+          TO: ${{ secrets.TO }}
+          SMTP: ${{ secrets.SMTP }}
+          PORT: ${{ secrets.PORT }}
+          ENCRYPT: ${{ secrets.ENCRYPT }}
+          SECRET: ${{ secrets.SECRET }}
+        run: |
+          for recipe in recipe_list.txt; do
+            if [ -f "$recipe" ]; then
+              ebook-convert "$recipe" .epub --output-profile kindle -vv
+            fi
+          done
+          for epub in *.epub; do
+            calibre-smtp --relay ${{ env.SMTP }} --port ${{ env.PORT }} --username ${{ env.FROM }} --password ${{ env.SECRET }} --encryption-method ${{ env.ENCRYPT }} ${{ env.FROM }} ${{ env.TO }} "$epub" "News"
+          done
