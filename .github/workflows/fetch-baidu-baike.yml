@@ -1,0 +1,76 @@
+name: Fetch Baidu Baike Articles
+
+on:
+  workflow_dispatch:
+
+jobs:
+  fetch-baike:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 安装 pandoc
+        run: sudo apt-get update && sudo apt-get install -y pandoc
+
+      - name: 通过 API 获取百科内容并生成电子书
+        env:
+          # 请务必在 GitHub Secrets 中添加你的 API_Key 和 Secret_Key
+          BAIKE_API_KEY: ${{ secrets.BAIKE_API_KEY }}
+          BAIKE_SECRET_KEY: ${{ secrets.BAIKE_SECRET_KEY }}
+        run: |
+          # 1. 用 API_Key 和 Secret_Key 获取 Access Token
+          # 此步骤需要调用百度云的认证API，具体命令可参考官方文档，
+          # 或直接参考你用Python生成Token的方法。
+
+          # 2. 循环调用百科内容API
+          mkdir -p baike_pages
+          # 定义要查询的词条列表
+          ARTICLES="黑洞,宇宙大爆炸,暗物质,量子力学"
+          TOKEN="YOUR_ACCESS_TOKEN" # 替换为上一步获取的Token
+
+          for article in $(echo $ARTICLES | tr "," "\n"); do
+            echo "正在抓取: $article"
+            # 调用百度百科API获取词条内容
+            # API 地址: https://appbuilder.baidu.com/v2/baike/lemma/get_content?search_type=lemmaTitle&search_key=${article}
+            # 注意替换 YOUR_ACCESS_TOKEN
+            curl -s -X GET "https://appbuilder.baidu.com/v2/baike/lemma/get_content?search_type=lemmaTitle&search_key=${article}" \
+              -H "Authorization: Bearer $TOKEN" > "baike_pages/${article}.json"
+
+            # 你可以用 `jq` 命令把 JSON 里的内容字段提取出来，转换成 HTML 或 Markdown
+          done
+
+          # 将 JSON 数据转换成 Markdown 或 HTML 后，再用 pandoc 生成 EPUB
+          # pandoc baike_pages/*.md -o baike_articles.epub --metadata title="百度百科科学词条" --toc
+          
+      - name: 发送到 Kindle
+        env:
+          FROM: ${{ secrets.FROM }}
+          TO: ${{ secrets.TO }}
+          SMTP: ${{ secrets.SMTP }}
+          PORT: ${{ secrets.PORT }}
+          SECRET: ${{ secrets.SECRET }}
+        run: |
+          python3 -c '
+          import smtplib, os
+          from email.mime.multipart import MIMEMultipart
+          from email.mime.base import MIMEBase
+          from email import encoders
+          from datetime import datetime
+          
+          msg = MIMEMultipart()
+          msg["From"] = os.environ["FROM"]
+          msg["To"] = os.environ["TO"]
+          msg["Subject"] = f"百度百科词条 {datetime.now().strftime("%Y-%m-%d %H:%M")}"
+          
+          with open("baike_articles.epub", "rb") as f:
+              part = MIMEBase("application", "epub+zip")
+              part.set_payload(f.read())
+              encoders.encode_base64(part)
+              part.add_header("Content-Disposition", "attachment", filename="baike_articles.epub")
+              msg.attach(part)
+          
+          with smtplib.SMTP_SSL(os.environ["SMTP"], int(os.environ["PORT"])) as server:
+              server.login(os.environ["FROM"], os.environ["SECRET"])
+              server.send_message(msg)
+          print("✅ 百度百科文章已发送")
+          '
