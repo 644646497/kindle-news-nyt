@@ -23,6 +23,7 @@ jobs:
           import requests
           from bs4 import BeautifulSoup
           import os
+          import time
           from datetime import datetime
           
           articles = ["黑洞", "宇宙大爆炸", "暗物质", "量子力学"]
@@ -38,37 +39,50 @@ jobs:
           '''
           
           headers = {
-              'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+              'User-Agent': 'Mozilla/5.0 (Linux; Android 13; SM-G991B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36',
+              'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+              'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
+              'Referer': 'https://www.baidu.com/',
           }
+          
+          session = requests.Session()
+          session.headers.update(headers)
           
           for article in articles:
               print(f"正在抓取: {article}")
-              url = f"https://baike.baidu.com/item/{article}"
+              # 使用移动版 URL
+              url = f"https://baike.baidu.com/item/{article}?adapt=1"
               
               try:
-                  resp = requests.get(url, headers=headers, timeout=30)
+                  resp = session.get(url, timeout=30)
+                  print(f"  HTTP状态码: {resp.status_code}")
                   if resp.status_code != 200:
                       print(f"  失败: HTTP {resp.status_code}")
                       continue
                   
                   soup = BeautifulSoup(resp.text, 'html.parser')
                   
-                  content = soup.find('div', class_='main-content')
+                  # 移动版正文选择器
+                  content = soup.find('div', class_='basic-info')
                   if not content:
                       content = soup.find('div', class_='lemma-summary')
                   if not content:
-                      content = soup.find('div', class_='basic-info')
+                      content = soup.find('div', class_='para')
+                  if not content:
+                      content = soup.find('div', attrs={'data-for': 'result'})
                   
                   if content:
                       text = content.get_text(separator='\n\n', strip=True)
-                      if len(text) > 10000:
-                          text = text[:10000] + "\n\n... 篇幅限制"
+                      if len(text) > 8000:
+                          text = text[:8000] + "\n\n... 篇幅限制"
                       
                       html_content += f"<h2>{article}</h2><hr/>{text.replace(chr(10), '<br/>')}<br/><br/>"
                       print(f"  成功: {len(text)} 字符")
                   else:
                       html_content += f"<h2>{article}</h2><hr/><p>无法提取正文</p><br/>"
                       print(f"  失败: 找不到正文")
+                  
+                  time.sleep(1)  # 避免请求过快
                       
               except Exception as e:
                   print(f"  错误: {e}")
