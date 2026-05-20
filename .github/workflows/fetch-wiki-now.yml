@@ -14,14 +14,13 @@ jobs:
       
       - name: Fetch Chinese Wikipedia full articles
         run: |
-          # 中文词条列表
-          ARTICLES="黑洞,宇宙大爆炸,银河系,超新星,暗物质,量子力学,广义相对论,火星,詹姆斯·韦伯太空望远镜,引力波"
+          # 两个词条
+          ARTICLES="黑洞,宇宙大爆炸"
           
           mkdir -p wiki_pages
           
           for article in $(echo $ARTICLES | tr "," "\n"); do
             echo "正在抓取: $article"
-            # 中文维基百科 API
             curl -s "https://zh.wikipedia.org/api/rest_v1/page/html/${article}" > "wiki_pages/${article}.html"
           done
           
