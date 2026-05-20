@@ -9,27 +9,97 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      
+      - name: Install dependencies
+        run: pip install requests beautifulsoup4 html2text
+      
+      - name: Fetch Baidu Baike and generate EPUB
+        run: |
+          python3 << 'EOF'
+          import requests
+          from bs4 import BeautifulSoup
+          import html2text
+          import os
+          from datetime import datetime
+          
+          # 词条列表
+          articles = ["黑洞", "宇宙大爆炸", "暗物质", "量子力学"]
+          
+          # 创建目录
+          os.makedirs("baike_pages", exist_ok=True)
+          
+          # 生成 HTML 内容
+          html_content = f"""
+          <html>
+          <head><meta charset="UTF-8"><title>百度百科科学词条</title></head>
+          <body>
+          <h1>百度百科科学词条</h1>
+          <p>生成时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</p>
+          """
+          
+          headers = {
+              'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+          }
+          
+          for article in articles:
+              print(f"正在抓取: {article}")
+              url = f"https://baike.baidu.com/item/{article}"
+              
+              try:
+                  resp = requests.get(url, headers=headers, timeout=30)
+                  if resp.status_code != 200:
+                      print(f"  失败: HTTP {resp.status_code}")
+                      continue
+                  
+                  soup = BeautifulSoup(resp.text, 'html.parser')
+                  
+                  # 找正文区域
+                  content = soup.find('div', class_='main-content')
+                  if not content:
+                      content = soup.find('div', class_='lemma-summary')
+                  if not content:
+                      content = soup.find('div', class_='basic-info')
+                  
+                  if content:
+                      # 提取纯文本
+                      text = content.get_text(separator='\n\n', strip=True)
+                      # 限制长度，避免太大
+                      if len(text) > 10000:
+                          text = text[:10000] + "\n\n... 篇幅限制"
+                      
+                      html_content += f"<h2>{article}</h2><hr/>{text.replace(chr(10), '<br/>')}<br/><br/>"
+                      print(f"  成功: {len(text)} 字符")
+                  else:
+                      html_content += f"<h2>{article}</h2><hr/><p>无法提取正文</p><br/>"
+                      print(f"  失败: 找不到正文")
+                      
+              except Exception as e:
+                  print(f"  错误: {e}")
+                  html_content += f"<h2>{article}</h2><hr/><p>抓取失败: {e}</p><br/>"
+          
+          html_content += "</body></html>"
+          
+          # 保存 HTML
+          with open("baike_articles.html", "w", encoding="utf-8") as f:
+              f.write(html_content)
+          
+          print("HTML 生成完成")
+          EOF
+      
       - name: Install pandoc
         run: sudo apt-get update && sudo apt-get install -y pandoc
       
-      - name: Fetch Baidu Baike full articles
+      - name: Convert to EPUB
         run: |
-          ARTICLES="黑洞,宇宙大爆炸,暗物质,量子力学"
-          
-          mkdir -p baike_pages
-          
-          for article in $(echo $ARTICLES | tr "," "\n"); do
-            echo "正在抓取: $article"
-            curl -s -L "https://baike.baidu.com/item/${article}" > "baike_pages/${article}.html"
-          done
-          
-          # 用 pandoc 生成 EPUB，跳过图片
-          pandoc baike_pages/*.html -o baike_articles.epub \
+          pandoc baike_articles.html -o baike_articles.epub \
             --metadata title="百度百科科学词条" \
             --toc \
-            --toc-depth=2 \
-            --extract-media=null
-          
+            --toc-depth=2
+      
       - name: Send to Kindle
         env:
           FROM: ${{ secrets.FROM }}
