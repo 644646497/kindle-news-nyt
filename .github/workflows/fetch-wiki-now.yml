@@ -14,8 +14,8 @@ jobs:
       
       - name: Fetch Chinese Wikipedia full articles
         run: |
-          # 两个词条
-          ARTICLES="黑洞,宇宙大爆炸"
+          # 四个简体词条
+          ARTICLES="黑洞,宇宙大爆炸,暗物质,量子力学"
           
           mkdir -p wiki_pages
           
