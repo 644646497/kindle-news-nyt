@@ -59,31 +59,4 @@ jobs:
               server.login(os.environ["FROM"], os.environ["SECRET"])
               server.send_message(msg)
           print("✅ 维基百科文章已发送")
-          '          SMTP: ${{ secrets.SMTP }}
-          PORT: ${{ secrets.PORT }}
-          SECRET: ${{ secrets.SECRET }}
-        run: |
-          python3 -c '
-          import smtplib, os
-          from email.mime.multipart import MIMEMultipart
-          from email.mime.base import MIMEBase
-          from email import encoders
-          from datetime import datetime
-          
-          msg = MIMEMultipart()
-          msg["From"] = os.environ["FROM"]
-          msg["To"] = os.environ["TO"]
-          msg["Subject"] = f"维基百科科学词条 {datetime.now().strftime("%Y-%m-%d %H:%M")}"
-          
-          with open("wiki_articles.epub", "rb") as f:
-              part = MIMEBase("application", "epub+zip")
-              part.set_payload(f.read())
-              encoders.encode_base64(part)
-              part.add_header("Content-Disposition", "attachment", filename="wiki_articles.epub")
-              msg.attach(part)
-          
-          with smtplib.SMTP_SSL(os.environ["SMTP"], int(os.environ["PORT"])) as server:
-              server.login(os.environ["FROM"], os.environ["SECRET"])
-              server.send_message(msg)
-          print("✅ 维基百科文章已发送")
           '
