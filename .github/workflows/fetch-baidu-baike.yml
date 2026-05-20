@@ -14,22 +14,21 @@ jobs:
       
       - name: Fetch Baidu Baike full articles
         run: |
-          # 简体词条
           ARTICLES="黑洞,宇宙大爆炸,暗物质,量子力学"
           
           mkdir -p baike_pages
           
           for article in $(echo $ARTICLES | tr "," "\n"); do
             echo "正在抓取: $article"
-            # 百度百科移动版页面，结构简单，适合抓取
             curl -s -L "https://baike.baidu.com/item/${article}" > "baike_pages/${article}.html"
           done
           
-          # 用 pandoc 生成 EPUB
+          # 用 pandoc 生成 EPUB，跳过图片
           pandoc baike_pages/*.html -o baike_articles.epub \
             --metadata title="百度百科科学词条" \
             --toc \
-            --toc-depth=2
+            --toc-depth=2 \
+            --extract-media=null
           
       - name: Send to Kindle
         env:
