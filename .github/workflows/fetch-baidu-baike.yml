@@ -8,41 +8,30 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
-      - name: 安装 pandoc
+      
+      - name: Install pandoc
         run: sudo apt-get update && sudo apt-get install -y pandoc
-
-      - name: 通过 API 获取百科内容并生成电子书
-        env:
-          # 请务必在 GitHub Secrets 中添加你的 API_Key 和 Secret_Key
-          BAIKE_API_KEY: ${{ secrets.BAIKE_API_KEY }}
-          BAIKE_SECRET_KEY: ${{ secrets.BAIKE_SECRET_KEY }}
+      
+      - name: Fetch Baidu Baike full articles
         run: |
-          # 1. 用 API_Key 和 Secret_Key 获取 Access Token
-          # 此步骤需要调用百度云的认证API，具体命令可参考官方文档，
-          # 或直接参考你用Python生成Token的方法。
-
-          # 2. 循环调用百科内容API
-          mkdir -p baike_pages
-          # 定义要查询的词条列表
+          # 简体词条
           ARTICLES="黑洞,宇宙大爆炸,暗物质,量子力学"
-          TOKEN="YOUR_ACCESS_TOKEN" # 替换为上一步获取的Token
-
+          
+          mkdir -p baike_pages
+          
           for article in $(echo $ARTICLES | tr "," "\n"); do
             echo "正在抓取: $article"
-            # 调用百度百科API获取词条内容
-            # API 地址: https://appbuilder.baidu.com/v2/baike/lemma/get_content?search_type=lemmaTitle&search_key=${article}
-            # 注意替换 YOUR_ACCESS_TOKEN
-            curl -s -X GET "https://appbuilder.baidu.com/v2/baike/lemma/get_content?search_type=lemmaTitle&search_key=${article}" \
-              -H "Authorization: Bearer $TOKEN" > "baike_pages/${article}.json"
-
-            # 你可以用 `jq` 命令把 JSON 里的内容字段提取出来，转换成 HTML 或 Markdown
+            # 百度百科移动版页面，结构简单，适合抓取
+            curl -s -L "https://baike.baidu.com/item/${article}" > "baike_pages/${article}.html"
           done
-
-          # 将 JSON 数据转换成 Markdown 或 HTML 后，再用 pandoc 生成 EPUB
-          # pandoc baike_pages/*.md -o baike_articles.epub --metadata title="百度百科科学词条" --toc
           
-      - name: 发送到 Kindle
+          # 用 pandoc 生成 EPUB
+          pandoc baike_pages/*.html -o baike_articles.epub \
+            --metadata title="百度百科科学词条" \
+            --toc \
+            --toc-depth=2
+          
+      - name: Send to Kindle
         env:
           FROM: ${{ secrets.FROM }}
           TO: ${{ secrets.TO }}
@@ -60,7 +49,7 @@ jobs:
           msg = MIMEMultipart()
           msg["From"] = os.environ["FROM"]
           msg["To"] = os.environ["TO"]
-          msg["Subject"] = f"百度百科词条 {datetime.now().strftime("%Y-%m-%d %H:%M")}"
+          msg["Subject"] = f"百度百科科学词条 {datetime.now().strftime("%Y-%m-%d %H:%M")}"
           
           with open("baike_articles.epub", "rb") as f:
               part = MIMEBase("application", "epub+zip")
