@@ -1,4 +1,4 @@
-name: Fetch Wikipedia Articles Now
+name: Fetch Wikipedia Simplified
 
 on:
   workflow_dispatch:
@@ -12,14 +12,15 @@ jobs:
       - name: Install pandoc
         run: sudo apt-get update && sudo apt-get install -y pandoc
       
-      - name: Fetch Chinese Wikipedia full articles
+      - name: Fetch Chinese Wikipedia simplified articles
         run: |
-          ARTICLES="习近平"
+          ARTICLES="黑洞,宇宙大爆炸,暗物质,量子力学"
           
           mkdir -p wiki_pages
           
           for article in $(echo $ARTICLES | tr "," "\n"); do
             echo "正在抓取: $article"
+            # 添加 ?variant=zh-cn 强制简体
             curl -s "https://zh.wikipedia.org/api/rest_v1/page/html/${article}?variant=zh-cn" > "wiki_pages/${article}.html"
           done
           
@@ -46,7 +47,7 @@ jobs:
           msg = MIMEMultipart()
           msg["From"] = os.environ["FROM"]
           msg["To"] = os.environ["TO"]
-          msg["Subject"] = f"维基百科科学词条 {datetime.now().strftime("%Y-%m-%d %H:%M")}"
+          msg["Subject"] = "维基百科科学词条 " + datetime.now().strftime("%Y-%m-%d %H:%M")
           
           with open("wiki_articles.epub", "rb") as f:
               part = MIMEBase("application", "epub+zip")
