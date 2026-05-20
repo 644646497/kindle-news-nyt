@@ -15,34 +15,30 @@ jobs:
           python-version: '3.11'
       
       - name: Install dependencies
-        run: pip install requests beautifulsoup4 html2text
+        run: pip install requests beautifulsoup4
       
       - name: Fetch Baidu Baike and generate EPUB
         run: |
           python3 << 'EOF'
           import requests
           from bs4 import BeautifulSoup
-          import html2text
           import os
           from datetime import datetime
           
-          # 词条列表
           articles = ["黑洞", "宇宙大爆炸", "暗物质", "量子力学"]
           
-          # 创建目录
           os.makedirs("baike_pages", exist_ok=True)
           
-          # 生成 HTML 内容
-          html_content = f"""
+          html_content = f'''
           <html>
           <head><meta charset="UTF-8"><title>百度百科科学词条</title></head>
           <body>
           <h1>百度百科科学词条</h1>
-          <p>生成时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</p>
-          """
+          <p>生成时间: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}</p>
+          '''
           
           headers = {
-              'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+              'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
           }
           
           for article in articles:
@@ -57,7 +53,6 @@ jobs:
                   
                   soup = BeautifulSoup(resp.text, 'html.parser')
                   
-                  # 找正文区域
                   content = soup.find('div', class_='main-content')
                   if not content:
                       content = soup.find('div', class_='lemma-summary')
@@ -65,9 +60,7 @@ jobs:
                       content = soup.find('div', class_='basic-info')
                   
                   if content:
-                      # 提取纯文本
                       text = content.get_text(separator='\n\n', strip=True)
-                      # 限制长度，避免太大
                       if len(text) > 10000:
                           text = text[:10000] + "\n\n... 篇幅限制"
                       
@@ -83,7 +76,6 @@ jobs:
           
           html_content += "</body></html>"
           
-          # 保存 HTML
           with open("baike_articles.html", "w", encoding="utf-8") as f:
               f.write(html_content)
           
@@ -118,7 +110,7 @@ jobs:
           msg = MIMEMultipart()
           msg["From"] = os.environ["FROM"]
           msg["To"] = os.environ["TO"]
-          msg["Subject"] = f"百度百科科学词条 {datetime.now().strftime("%Y-%m-%d %H:%M")}"
+          msg["Subject"] = "百度百科科学词条 " + datetime.now().strftime("%Y-%m-%d %H:%M")
           
           with open("baike_articles.epub", "rb") as f:
               part = MIMEBase("application", "epub+zip")
