@@ -1,0 +1,65 @@
+name: Fetch Wikipedia Articles Now
+
+on:
+  workflow_dispatch:
+
+jobs:
+  fetch-wiki:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Install pandoc
+        run: sudo apt-get update && sudo apt-get install -y pandoc
+      
+      - name: Fetch Chinese Wikipedia full articles
+        run: |
+          # 中文词条列表
+          ARTICLES="黑洞,宇宙大爆炸,银河系,超新星,暗物质,量子力学,广义相对论,火星,詹姆斯·韦伯太空望远镜,引力波"
+          
+          mkdir -p wiki_pages
+          
+          for article in $(echo $ARTICLES | tr "," "\n"); do
+            echo "正在抓取: $article"
+            # 中文维基百科 API
+            curl -s "https://zh.wikipedia.org/api/rest_v1/page/html/${article}" > "wiki_pages/${article}.html"
+          done
+          
+          # 用 pandoc 生成 EPUB
+          pandoc wiki_pages/*.html -o wiki_articles.epub \
+            --metadata title="维基百科科学词条" \
+            --toc \
+            --toc-depth=2
+          
+      - name: Send to Kindle
+        env:
+          FROM: ${{ secrets.FROM }}
+          TO: ${{ secrets.TO }}
+          SMTP: ${{ secrets.SMTP }}
+          PORT: ${{ secrets.PORT }}
+          SECRET: ${{ secrets.SECRET }}
+        run: |
+          python3 -c '
+          import smtplib, os
+          from email.mime.multipart import MIMEMultipart
+          from email.mime.base import MIMEBase
+          from email import encoders
+          from datetime import datetime
+          
+          msg = MIMEMultipart()
+          msg["From"] = os.environ["FROM"]
+          msg["To"] = os.environ["TO"]
+          msg["Subject"] = f"维基百科科学词条 {datetime.now().strftime("%Y-%m-%d %H:%M")}"
+          
+          with open("wiki_articles.epub", "rb") as f:
+              part = MIMEBase("application", "epub+zip")
+              part.set_payload(f.read())
+              encoders.encode_base64(part)
+              part.add_header("Content-Disposition", "attachment", filename="wiki_articles.epub")
+              msg.attach(part)
+          
+          with smtplib.SMTP_SSL(os.environ["SMTP"], int(os.environ["PORT"])) as server:
+              server.login(os.environ["FROM"], os.environ["SECRET"])
+              server.send_message(msg)
+          print("✅ 维基百科文章已发送")
+          '
