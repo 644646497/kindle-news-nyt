@@ -1,8 +1,8 @@
-name: 百度百科精准抓取推Kindle
+name: 维基百科简体抓取推Kindle
 on:
   schedule:
     - cron: '0 20 * * *'
-  workflow_dispatch:
+  workflow_dispatch
 
 jobs:
   crawl:
@@ -10,66 +10,79 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: 搭建Python
+      - name: Setup Python
         uses: actions/setup-python@v5
         with:
-          python-version: 3.11
+          python-version: "3.11"
 
-      - name: 安装依赖
-        run: pip install requests beautifulsoup4 lxml
-
-      - name: 精准抓取百科全文
+      - name: Install dependencies
         run: |
-          python3 << 'PY'
+          pip install requests beautifulsoup4 opencc-python-regex
+
+      - name: 抓取维基百科（自动繁转简）
+        run: |
+          python3 << 'EOF'
           import requests
           from bs4 import BeautifulSoup
+          from opencc import OpenCC
           from datetime import datetime
           import time
 
-          # 自定义词条
-          word_list = ["银河系","黑洞","火星","引力波"]
+          # 1. 镜像站（任选一个，国内可直连）
+          base = "https://zh.wiki.hancel.org/wiki/"  # 简体优先镜像
+          # base = "https://chinois.jinzhao.wiki/wiki/"
+          # base = "https://wikiless.org/wiki/?lang=zh"
+
+          # 2. 你要抓的词条
+          words = ["黑洞", "银河系", "火星", "暗物质"]
+
+          # 3. 繁转简转换器
+          cc = OpenCC('t2s')
+
           headers = {
-              "User-Agent":"Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
-              "Referer":"https://baike.baidu.com/"
+              "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
           }
 
-          all_text = f"百度百科合集\n生成时间：{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n{'='*50}\n\n"
+          all_text = f"维基百科（简体）\n生成时间：{datetime.now()}\n====================================\n\n"
 
-          for word in word_list:
-              url = f"https://baike.baidu.com/item/{word}"
-              print(f"正在抓取：{word}")
+          for w in words:
+              url = base + w
+              print("抓取：", url)
               try:
                   res = requests.get(url, headers=headers, timeout=20)
                   res.encoding = "utf-8"
-                  soup = BeautifulSoup(res.text, "lxml")
+                  soup = BeautifulSoup(res.text, "html.parser")
 
-                  # 【最新正确正文标签】
-                  article = soup.select_one("div.content-wrapper") or soup.select_one("div.para-content")
-                  if not article:
-                      article = soup.find("div", class_="J-lemma-content")
+                  # 维基正文节点
+                  content = soup.select_one("div.mw-parser-output")
+                  if not content:
+                      all_text += f"【{w}】\n未找到正文\n\n"
+                      continue
 
-                  # 清理垃圾标签
-                  for bad in article.find_all(["script","style","sup","table","iframe","aside"]):
+                  # 清理不需要的标签
+                  for bad in content.find_all(["script","style","table","sup","iframe","aside"]):
                       bad.decompose()
 
-                  full_content = article.get_text("\n", strip=True)
-                  # 限制长度防过大
-                  if len(full_content) > 8000:
-                      full_content = full_content[:8000] + "\n……内容过长截断"
+                  raw = content.get_text("\n", strip=True)
+                  # 繁体转简体
+                  text = cc.convert(raw)
 
-                  all_text += f"【{word}】\n{full_content}\n\n{'-'*40}\n\n"
-                  print(f"✅ {word} 抓取成功")
+                  if len(text) > 8000:
+                      text = text[:8000] + "\n……（过长截断）"
+
+                  all_text += f"【{w}】\n{text}\n\n------------------------------------\n\n"
+                  print(f"✅ {w} 成功")
               except Exception as e:
-                  all_text += f"【{word}】\n抓取失败：{str(e)}\n\n{'-'*40}\n\n"
-                  print(f"❌ {word} 失败")
+                  all_text += f"【{w}】\n抓取失败：{e}\n\n------------------------------------\n\n"
+                  print(f"❌ {w} 失败", e)
               time.sleep(1.5)
 
-          with open("baike_full.txt", "w", encoding="utf-8") as f:
+          with open("wiki_zhs.txt", "w", encoding="utf-8") as f:
               f.write(all_text)
-          print("✅ 完整文本生成完毕")
-          PY
+          print("✅ wiki_zhs.txt 完成")
+          EOF
 
-      - name: 发送纯文本到Kindle
+      - name: 发送到 Kindle（纯文本）
         env:
           FROM: ${{ secrets.FROM }}
           TO: ${{ secrets.TO }}
@@ -77,7 +90,7 @@ jobs:
           PORT: ${{ secrets.PORT }}
           SECRET: ${{ secrets.SECRET }}
         run: |
-          python3 << 'SEND'
+          python3 << 'EOF'
           import smtplib, os
           from email.mime.multipart import MIMEMultipart
           from email.mime.text import MIMEText
@@ -85,16 +98,16 @@ jobs:
           msg = MIMEMultipart()
           msg["From"] = os.environ["FROM"]
           msg["To"] = os.environ["TO"]
-          msg["Subject"] = ""
+          msg["Subject"] = ""  # 空标题，Kindle最稳
 
-          with open("baike_full.txt","r",encoding="utf-8") as f:
-              txt = f.read()
-          part = MIMEText(txt, "plain", "utf-8")
-          msg.attach(part)
+          with open("wiki_zhs.txt", "r", encoding="utf-8") as f:
+              content = f.read()
+
+          msg.attach(MIMEText(content, "plain", "utf-8"))
 
           server = smtplib.SMTP_SSL(os.environ["SMTP"], int(os.environ["PORT"]))
           server.login(os.environ["FROM"], os.environ["SECRET"])
           server.send_message(msg)
           server.quit()
-          print("✅ 全文推送成功")
-          SEND
+          print("✅ 已发送到 Kindle")
+          EOF
