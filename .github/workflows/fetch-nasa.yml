@@ -26,7 +26,6 @@ jobs:
           import feedparser
           from datetime import datetime
 
-          # 使用 RSSHub 的 NASA 中文源
           rss_url = "https://rsshub.app/nasa"
           
           feed = feedparser.parse(rss_url)
@@ -70,7 +69,7 @@ jobs:
           PORT: ${{ secrets.PORT }}
           SECRET: ${{ secrets.SECRET }}
         run: |
-          python3 -c '
+          python3 << 'EOF'
           import smtplib, os
           from email.mime.multipart import MIMEMultipart
           from email.mime.base import MIMEBase
@@ -93,15 +92,7 @@ jobs:
               server.login(os.environ["FROM"], os.environ["SECRET"])
               server.send_message(msg)
           print("✅ NASA 中文新闻已发送")
-          '          
-          with open("nasa.html", "rb") as f:
-              part = MIMEBase("text", "html")
-              part.set_payload(f.read())
-              encoders.encode_base64(part)
-              part.add_header("Content-Disposition", "attachment", filename="nasa.html")
-              msg.attach(part)
-          
-          with smtplib.SMTP_SSL(os.environ["SMTP"], int(os.environ["PORT"])) as server:
+          EOF          with smtplib.SMTP_SSL(os.environ["SMTP"], int(os.environ["PORT"])) as server:
               server.login(os.environ["FROM"], os.environ["SECRET"])
               server.send_message(msg)
           print("✅ NASA 文章已发送")
