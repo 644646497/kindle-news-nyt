@@ -8,7 +8,6 @@ on:
 jobs:
   fetch:
     runs-on: ubuntu-latest
-
     steps:
       - uses: actions/checkout@v4
 
@@ -18,7 +17,7 @@ jobs:
           python-version: '3.11'
 
       - name: Install dependencies
-        run: pip install requests feedparser beautifulsoup4 html2text
+        run: pip install requests feedparser beautifulsoup4
 
       - name: Fetch NASA full articles
         run: |
@@ -42,63 +41,54 @@ jobs:
           <p>生成时间: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}</p>
           """
 
-          headers = {
-              'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'
-          }
+          headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
 
-          for i, entry in enumerate(feed.entries[:5]):  # 控制体积
+          for i, entry in enumerate(feed.entries[:5]):
               title = entry.get('title', '无标题')
               link = entry.get('link', '')
-
               print(f"抓取: {title[:40]}...")
 
               try:
                   resp = requests.get(link, headers=headers, timeout=30)
                   soup = BeautifulSoup(resp.text, 'html.parser')
 
-                  content = (
-                      soup.find('article')
-                      or soup.find('div', class_='entry-content')
-                      or soup.find('main')
-                  )
+                  content = soup.find('article') or soup.find('div', class_='entry-content') or soup.find('main')
 
                   if content:
-                      for tag in content(['script','style','nav','footer','aside']):
+                      for tag in content(['script', 'style', 'nav', 'footer', 'aside']):
                           tag.decompose()
-
-                      text = content.get_text("\n", strip=True)
-
+                      text = content.get_text('\n', strip=True)
                       if len(text) > 6000:
                           text = text[:6000] + "\n\n[内容已截断]"
-
                       html_content += f"<h2>{title}</h2><p>{text}</p><hr/>"
                       print("  ✔ 成功")
                   else:
-                      html_content += f"<h2>{title}</h2><p>无法提取正文</p>"
+                      html_content += f"<h2>{title}</h2><p>无法提取正文</p><hr/>"
                       print("  ⚠ 未找到正文")
 
                   time.sleep(1)
 
               except Exception as e:
                   print("  ❌ 错误:", e)
-                  html_content += f"<h2>{title}</h2><p>抓取失败</p>"
+                  html_content += f"<h2>{title}</h2><p>抓取失败</p><hr/>"
 
           html_content += "</body></html>"
 
           with open("nasa_articles.html", "w", encoding="utf-8") as f:
               f.write(html_content)
 
-          print("HTML完成")
+          print("HTML 生成完成")
           EOF
 
       - name: Install pandoc
         run: sudo apt-get update && sudo apt-get install -y pandoc
 
-      - name: Convert to PDF
+      - name: Convert to EPUB
         run: |
-          pandoc nasa_articles.html -o nasa_articles.pdf \
+          pandoc nasa_articles.html -o nasa_articles.epub \
             --metadata title="NASA宇宙新闻" \
-            --toc
+            --toc \
+            --toc-depth=2
 
       - name: Send to Kindle
         env:
@@ -107,7 +97,6 @@ jobs:
           SMTP: ${{ secrets.SMTP }}
           PORT: ${{ secrets.PORT }}
           SECRET: ${{ secrets.SECRET }}
-
         run: |
           python3 -c '
           import smtplib, os
@@ -115,27 +104,21 @@ jobs:
           from email.mime.base import MIMEBase
           from email import encoders
           from datetime import datetime
-
-          try:
-              msg = MIMEMultipart()
-              msg["From"] = os.environ["FROM"]
-              msg["To"] = os.environ["TO"]
-              msg["Subject"] = "NASA宇宙新闻 " + datetime.now().strftime("%Y-%m-%d")
-
-              with open("nasa_articles.pdf", "rb") as f:
-                  part = MIMEBase("application", "pdf")
-                  part.set_payload(f.read())
-                  encoders.encode_base64(part)
-                  part.add_header("Content-Disposition", "attachment", filename="nasa.pdf")
-                  msg.attach(part)
-
-              with smtplib.SMTP_SSL(os.environ["SMTP"], int(os.environ["PORT"])) as server:
-                  server.login(os.environ["FROM"], os.environ["SECRET"])
-                  server.send_message(msg)
-
-              print("✅ NASA 已发送")
-
-          except Exception as e:
-              print("❌ SMTP失败:", e)
-              raise
+          
+          msg = MIMEMultipart()
+          msg["From"] = os.environ["FROM"]
+          msg["To"] = os.environ["TO"]
+          msg["Subject"] = "NASA宇宙新闻 " + datetime.now().strftime("%Y-%m-%d")
+          
+          with open("nasa_articles.epub", "rb") as f:
+              part = MIMEBase("application", "epub+zip")
+              part.set_payload(f.read())
+              encoders.encode_base64(part)
+              part.add_header("Content-Disposition", "attachment", filename="nasa_articles.epub")
+              msg.attach(part)
+          
+          with smtplib.SMTP_SSL(os.environ["SMTP"], int(os.environ["PORT"])) as server:
+              server.login(os.environ["FROM"], os.environ["SECRET"])
+              server.send_message(msg)
+          print("✅ NASA 全文已发送")
           '
