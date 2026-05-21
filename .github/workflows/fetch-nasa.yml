@@ -1,0 +1,109 @@
+name: Fetch NASA Chinese
+
+on:
+  schedule:
+    - cron: '0 20 * * *'
+  workflow_dispatch:
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      
+      - name: Install dependencies
+        run: pip install requests feedparser beautifulsoup4
+      
+      - name: Fetch NASA articles
+        run: |
+          python3 << 'EOF'
+          import requests
+          import feedparser
+          from bs4 import BeautifulSoup
+          from datetime import datetime
+          
+          # 使用 RSSHub 的 NASA 路由（自带中文）
+          rss_url = "https://rsshub.app/nasa/breaking-news"
+          
+          try:
+              feed = feedparser.parse(rss_url)
+              print(f"找到 {len(feed.entries)} 篇文章")
+          except Exception as e:
+              print(f"RSS 抓取失败: {e}")
+              exit(1)
+          
+          html_content = f"""
+          <html>
+          <head><meta charset="UTF-8"><title>NASA 宇宙新闻</title></head>
+          <body>
+          <h1>NASA 宇宙新闻</h1>
+          <p>生成时间: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}</p>
+          """
+          
+          for entry in feed.entries[:10]:
+              title = entry.get('title', '无标题')
+              link = entry.get('link', '')
+              summary = entry.get('summary', entry.get('description', ''))
+              
+              html_content += f"""
+              <h2>{title}</h2>
+              <p><a href="{link}">原文链接</a></p>
+              <div>{summary}</div>
+              <hr/>
+              """
+          
+          html_content += "</body></html>"
+          
+          with open("nasa_articles.html", "w", encoding="utf-8") as f:
+              f.write(html_content)
+          
+          print("HTML 生成完成")
+          EOF
+      
+      - name: Install pandoc
+        run: sudo apt-get update && sudo apt-get install -y pandoc
+      
+      - name: Convert to EPUB
+        run: |
+          pandoc nasa_articles.html -o nasa_articles.epub \
+            --metadata title="NASA宇宙新闻" \
+            --toc \
+            --toc-depth=2
+      
+      - name: Send to Kindle
+        env:
+          FROM: ${{ secrets.FROM }}
+          TO: ${{ secrets.TO }}
+          SMTP: ${{ secrets.SMTP }}
+          PORT: ${{ secrets.PORT }}
+          SECRET: ${{ secrets.SECRET }}
+        run: |
+          python3 -c '
+          import smtplib, os
+          from email.mime.multipart import MIMEMultipart
+          from email.mime.base import MIMEBase
+          from email import encoders
+          from datetime import datetime
+          
+          msg = MIMEMultipart()
+          msg["From"] = os.environ["FROM"]
+          msg["To"] = os.environ["TO"]
+          msg["Subject"] = f"NASA宇宙新闻 {datetime.now().strftime("%Y-%m-%d")}"
+          
+          with open("nasa_articles.epub", "rb") as f:
+              part = MIMEBase("application", "epub+zip")
+              part.set_payload(f.read())
+              encoders.encode_base64(part)
+              part.add_header("Content-Disposition", "attachment", filename="nasa_articles.epub")
+              msg.attach(part)
+          
+          with smtplib.SMTP_SSL(os.environ["SMTP"], int(os.environ["PORT"])) as server:
+              server.login(os.environ["FROM"], os.environ["SECRET"])
+              server.send_message(msg)
+          print("✅ NASA 文章已发送")
+          '
