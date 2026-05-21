@@ -1,0 +1,33 @@
+import os
+import time
+import re
+import datetime
+
+os.environ['TZ'] = 'Asia/Shanghai'
+time.tzset()
+
+class AdvancedUserRecipeBBC(BasicNewsRecipe):
+    title = datetime.datetime.now().strftime('BBC中文 - %Y-%m-%d %H-%M')
+    language = 'zh_CN'
+    oldest_article = 1
+    max_articles_per_feed = 10
+    
+    no_summaries = True
+    use_embedded_content = True
+    
+    remove_tags = [
+        dict(name='hr'),
+        dict(name='a', attrs={'href': re.compile(r'.*feedx.*')}),
+        dict(name='script'),
+        dict(name='style'),
+    ]
+    
+    def preprocess_html(self, soup):
+        for a in soup.find_all('a'):
+            if 'feedx' in a.get('href', ''):
+                a.decompose()
+        return soup
+    
+    feeds = [
+        ('BBC中文', 'https://feedx.net/rss/bbc.xml'),
+    ]
