@@ -17,7 +17,7 @@ jobs:
           python-version: '3.11'
 
       - name: Install dependencies
-        run: pip install requests feedparser beautifulsoup4
+        run: pip install requests feedparser beautifulsoup4 lxml
 
       - name: Fetch NASA full articles
         run: |
@@ -29,68 +29,66 @@ jobs:
           import time
 
           rss_url = "https://www.nasa.gov/news-release/feed/"
-
           feed = feedparser.parse(rss_url)
           print(f"RSS 抓到 {len(feed.entries)} 篇文章")
 
           html_content = f"""
-          <html>
-          <head><meta charset="UTF-8"><title>NASA 宇宙新闻</title></head>
+          <!DOCTYPE html>
+          <html lang="zh-CN">
+          <head>
+          <meta charset="UTF-8">
+          <title>NASA宇宙新闻</title>
+          </head>
           <body>
-          <h1>NASA 宇宙新闻（全文）</h1>
-          <p>生成时间: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}</p>
+          <h1>NASA 宇宙新闻</h1>
+          <p>更新时间: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}</p>
+          <hr>
           """
 
           headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
 
-          for i, entry in enumerate(feed.entries[:5]):
+          for entry in feed.entries[:5]:
               title = entry.get('title', '无标题')
               link = entry.get('link', '')
-              print(f"抓取: {title[:40]}...")
+              print(f"抓取：{title[:35]}")
 
               try:
-                  resp = requests.get(link, headers=headers, timeout=30)
-                  soup = BeautifulSoup(resp.text, 'html.parser')
-
-                  content = soup.find('article') or soup.find('div', class_='entry-content') or soup.find('main')
+                  resp = requests.get(link, headers=headers, timeout=25)
+                  resp.encoding = "utf-8"
+                  soup = BeautifulSoup(resp.text, "lxml")
+                  content = soup.find("article") or soup.find("div", class_="entry-content") or soup.find("main")
 
                   if content:
-                      for tag in content(['script', 'style', 'nav', 'footer', 'aside']):
-                          tag.decompose()
-                      text = content.get_text('\n', strip=True)
-                      if len(text) > 6000:
-                          text = text[:6000] + "\n\n[内容已截断]"
-                      html_content += f"<h2>{title}</h2><p>{text}</p><hr/>"
-                      print("  ✔ 成功")
+                      for bad in content(["script","style","nav","footer","aside","header"]):
+                          bad.decompose()
+                      text = content.get_text("\n\n", strip=True)
+                      if len(text) > 5500:
+                          text = text[:5500] + "\n\n【内容过长已截断】"
+                      html_content += f"<h2>{title}</h2><div>{text}</div><hr>"
                   else:
-                      html_content += f"<h2>{title}</h2><p>无法提取正文</p><hr/>"
-                      print("  ⚠ 未找到正文")
-
-                  time.sleep(1)
-
+                      html_content += f"<h2>{title}</h2><p>正文抓取失败</p><hr>"
+                  time.sleep(1.2)
               except Exception as e:
-                  print("  ❌ 错误:", e)
-                  html_content += f"<h2>{title}</h2><p>抓取失败</p><hr/>"
+                  print("抓取异常：",e)
+                  html_content += f"<h2>{title}</h2><p>网络抓取失败</p><hr>"
 
           html_content += "</body></html>"
-
-          with open("nasa_articles.html", "w", encoding="utf-8") as f:
+          with open("nasa_news.html","w",encoding="utf-8") as f:
               f.write(html_content)
-
-          print("HTML 生成完成")
+          print("✅ HTML 生成完毕")
           EOF
 
       - name: Install pandoc
-        run: sudo apt-get update && sudo apt-get install -y pandoc
+        run: sudo apt update && sudo apt install -y pandoc
 
-      - name: Convert to EPUB
+      # 改用 MOBI 格式，Kindle 原生最兼容
+      - name: Convert HTML to MOBI
         run: |
-          pandoc nasa_articles.html -o nasa_articles.epub \
-            --metadata title="NASA宇宙新闻" \
-            --toc \
-            --toc-depth=2
+          pandoc nasa_news.html -o nasa_news.mobi \
+            --metadata title="NASA每日新闻" \
+            --toc --toc-depth=2
 
-      - name: Send to Kindle
+      - name: Push To Kindle
         env:
           FROM: ${{ secrets.FROM }}
           TO: ${{ secrets.TO }}
@@ -98,27 +96,34 @@ jobs:
           PORT: ${{ secrets.PORT }}
           SECRET: ${{ secrets.SECRET }}
         run: |
-          python3 -c '
+          python3 << 'PYEOF'
           import smtplib, os
           from email.mime.multipart import MIMEMultipart
-          from email.mime.base import MIMEBase
-          from email import encoders
+          from email.mime.application import MIMEApplication
           from datetime import datetime
-          
+
           msg = MIMEMultipart()
-          msg["From"] = os.environ["FROM"]
-          msg["To"] = os.environ["TO"]
-          msg["Subject"] = "NASA宇宙新闻 " + datetime.now().strftime("%Y-%m-%d")
-          
-          with open("nasa_articles.epub", "rb") as f:
-              part = MIMEBase("application", "epub+zip")
-              part.set_payload(f.read())
-              encoders.encode_base64(part)
-              part.add_header("Content-Disposition", "attachment", filename="nasa_articles.epub")
-              msg.attach(part)
-          
-          with smtplib.SMTP_SSL(os.environ["SMTP"], int(os.environ["PORT"])) as server:
-              server.login(os.environ["FROM"], os.environ["SECRET"])
-              server.send_message(msg)
-          print("✅ NASA 全文已发送")
-          '
+          sender = os.environ["FROM"]
+          receiver = os.environ["TO"]
+          msg["From"] = sender
+          msg["To"] = receiver
+          # Kindle 推送最简主题，不要多余符号
+          msg["Subject"] = f"NASA News {datetime.now().strftime('%m-%d')}"
+
+          # 挂载MOBI附件
+          with open("nasa_news.mobi","rb") as f:
+              attach = MIMEApplication(f.read(),_subtype="x-mobipocket-ebook")
+              attach.add_header("Content-Disposition","attachment",filename="NASA_News.mobi")
+              msg.attach(attach)
+
+          # 稳定SSL发信
+          try:
+              server = smtplib.SMTP_SSL(os.environ["SMTP"],int(os.environ["PORT"]))
+              server.login(sender,os.environ["SECRET"])
+              server.sendmail(sender,receiver,msg.as_string())
+              server.quit()
+              print("🎉 推送邮件发送成功，请查Kindle")
+          except Exception as err:
+              print("❌ 发信失败：",err)
+              exit(1)
+          PYEOF
