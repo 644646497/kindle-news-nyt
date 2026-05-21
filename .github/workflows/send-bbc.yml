@@ -1,5 +1,4 @@
 name: Send BBC to Kindle
-
 on:
   schedule:
     - cron: '0 12 * * *'
