@@ -1,0 +1,88 @@
+name: 抓取百度百科推送Kindle
+on:
+  schedule:
+    - cron: '0 20 * * *'
+  workflow_dispatch:
+
+jobs:
+  crawl:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 搭建Python环境
+        uses: actions/setup-python@v5
+        with:
+          python-version: 3.11
+
+      - name: 安装依赖
+        run: pip install requests beautifulsoup4
+
+      - name: 爬取百度百科生成HTML
+        run: |
+          python3 << 'PY'
+          import requests
+          from bs4 import BeautifulSoup
+          from datetime import datetime
+          import time
+
+          words = ["银河系","黑洞","火星","引力波","光年"]
+          ua = {"User-Agent":"Mozilla/5.0"}
+          html = f'<html><head><meta charset=utf-8><title>百度百科</title></head><body><h1>百科合集</h1><p>{datetime.now()}</p><hr>'
+
+          for name in words:
+            url = f"https://baike.baidu.com/item/{name}"
+            try:
+              res = requests.get(url,headers=ua,timeout=15)
+              res.encoding="utf-8"
+              soup = BeautifulSoup(res.text,"html.parser")
+              con = soup.find("div",class_="main-content") or soup.find("div",class_="lemma-content")
+              if con:
+                for s in con(["script","style","aside","footer"]):s.decompose()
+                txt = con.get_text("\n\n",strip=True)
+                html += f"<h2>{name}</h2><p>{txt}</p><hr>"
+              else:
+                html += f"<h2>{name}</h2><p>无正文</p><hr>"
+            except:
+              html += f"<h2>{name}</h2><p>抓取失败</p><hr>"
+            time.sleep(1)
+          html += "</body></html>"
+          open("baike.html","w",encoding="utf-8").write(html)
+          print("HTML完成")
+          PY
+
+      - name: 安装转档工具
+        run: sudo apt install -y pandoc
+
+      - name: HTML转EPUB
+        run: pandoc baike.html -o baike.epub --toc
+
+      - name: 发送到Kindle
+        env:
+          FROM: ${{ secrets.FROM }}
+          TO: ${{ secrets.TO }}
+          SMTP: ${{ secrets.SMTP }}
+          PORT: ${{ secrets.PORT }}
+          SECRET: ${{ secrets.SECRET }}
+        run: |
+          python3 << 'SEND'
+          import smtplib,os
+          from email.mime.multipart import MIMEMultipart
+          from email.mime.base import MIMEBase
+          from email import encoders
+          msg=MIMEMultipart()
+          msg["From"]=os.environ["FROM"]
+          msg["To"]=os.environ["TO"]
+          msg["Subject"]="百度百科每日推送"
+          with open("baike.epub","rb") as f:
+            att=MIMEBase("application","epub+zip")
+            att.set_payload(f.read())
+            encoders.encode_base64(att)
+            att.add_header("Content-Disposition","attachment",filename="百科合集.epub")
+            msg.attach(att)
+          s=smtplib.SMTP_SSL(os.environ["SMTP"],int(os.environ["PORT"]))
+          s.login(os.environ["FROM"],os.environ["SECRET"])
+          s.send_message(msg)
+          s.quit()
+          print("推送成功")
+          SEND
