@@ -1,0 +1,33 @@
+import os
+import time
+import re
+import datetime
+
+os.environ['TZ'] = 'Asia/Shanghai'
+time.tzset()
+
+class AdvancedUserRecipe1281929026(BasicNewsRecipe):
+    title = datetime.datetime.now().strftime('日经中文 - %Y-%m-%d %H-%M')
+    language = 'zh_CN'
+    oldest_article = 1
+    max_articles_per_feed = 10
+    
+    no_summaries = True
+    use_embedded_content = True
+    
+    remove_tags = [
+        dict(name='hr'),
+        dict(name='a', attrs={'href': re.compile(r'.*feedx.*')}),
+        dict(name='script'),
+        dict(name='style'),
+    ]
+    
+    def preprocess_html(self, soup):
+        for a in soup.find_all('a'):
+            if 'feedx' in a.get('href', ''):
+                a.decompose()
+        return soup
+    
+    feeds = [
+        ('日经中文', 'https://raw.githubusercontent.com/644646497/rs/main/feed.xml'),
+    ]
