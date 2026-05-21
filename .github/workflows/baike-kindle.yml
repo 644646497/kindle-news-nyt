@@ -1,4 +1,4 @@
-name: 抓取百度百科推送Kindle
+name: 百度百科精准抓取推Kindle
 on:
   schedule:
     - cron: '0 20 * * *'
@@ -10,15 +10,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: 搭建Python环境
+      - name: 搭建Python
         uses: actions/setup-python@v5
         with:
           python-version: 3.11
 
       - name: 安装依赖
-        run: pip install requests beautifulsoup4
+        run: pip install requests beautifulsoup4 lxml
 
-      - name: 爬取百科生成纯文本
+      - name: 精准抓取百科全文
         run: |
           python3 << 'PY'
           import requests
@@ -26,31 +26,50 @@ jobs:
           from datetime import datetime
           import time
 
-          words = ["银河系","黑洞","火星","引力波"]
-          ua = {"User-Agent":"Mozilla/5.0"}
-          content = f"百度百科精选内容\n生成时间：{datetime.now()}\n================================\n\n"
+          # 自定义词条
+          word_list = ["银河系","黑洞","火星","引力波"]
+          headers = {
+              "User-Agent":"Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+              "Referer":"https://baike.baidu.com/"
+          }
 
-          for name in words:
-            url = f"https://baike.baidu.com/item/{name}"
-            try:
-              res = requests.get(url,headers=ua,timeout=15)
-              res.encoding="utf-8"
-              soup = BeautifulSoup(res.text,"html.parser")
-              con = soup.find("div",class_="main-content") or soup.find("div",class_="lemma-content")
-              if con:
-                for s in con(["script","style","aside","footer"]):s.decompose()
-                txt = con.get_text("\n\n",strip=True)
-                content += f"【{name}】\n{txt}\n\n--------------------------------\n\n"
-              else:
-                content += f"【{name}】\n内容抓取失败\n\n"
-            except:
-              content += f"【{name}】\n网络抓取失败\n\n"
-            time.sleep(1)
-          open("baike.txt","w",encoding="utf-8").write(content)
-          print("文本生成完成")
+          all_text = f"百度百科合集\n生成时间：{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n{'='*50}\n\n"
+
+          for word in word_list:
+              url = f"https://baike.baidu.com/item/{word}"
+              print(f"正在抓取：{word}")
+              try:
+                  res = requests.get(url, headers=headers, timeout=20)
+                  res.encoding = "utf-8"
+                  soup = BeautifulSoup(res.text, "lxml")
+
+                  # 【最新正确正文标签】
+                  article = soup.select_one("div.content-wrapper") or soup.select_one("div.para-content")
+                  if not article:
+                      article = soup.find("div", class_="J-lemma-content")
+
+                  # 清理垃圾标签
+                  for bad in article.find_all(["script","style","sup","table","iframe","aside"]):
+                      bad.decompose()
+
+                  full_content = article.get_text("\n", strip=True)
+                  # 限制长度防过大
+                  if len(full_content) > 8000:
+                      full_content = full_content[:8000] + "\n……内容过长截断"
+
+                  all_text += f"【{word}】\n{full_content}\n\n{'-'*40}\n\n"
+                  print(f"✅ {word} 抓取成功")
+              except Exception as e:
+                  all_text += f"【{word}】\n抓取失败：{str(e)}\n\n{'-'*40}\n\n"
+                  print(f"❌ {word} 失败")
+              time.sleep(1.5)
+
+          with open("baike_full.txt", "w", encoding="utf-8") as f:
+              f.write(all_text)
+          print("✅ 完整文本生成完毕")
           PY
 
-      - name: 发送TXT到Kindle
+      - name: 发送纯文本到Kindle
         env:
           FROM: ${{ secrets.FROM }}
           TO: ${{ secrets.TO }}
@@ -59,24 +78,23 @@ jobs:
           SECRET: ${{ secrets.SECRET }}
         run: |
           python3 << 'SEND'
-          import smtplib,os
+          import smtplib, os
           from email.mime.multipart import MIMEMultipart
-          from email.mime.base import MIMEBase
-          from email import encoders
-          msg=MIMEMultipart()
-          msg["From"]=os.environ["FROM"]
-          msg["To"]=os.environ["TO"]
-          # Kindle推送关键：标题留空/极简，只发附件
-          msg["Subject"]=""
-          with open("baike.txt","rb") as f:
-            att=MIMEBase("text","plain")
-            att.set_payload(f.read())
-            encoders.encode_base64(att)
-            att.add_header("Content-Disposition","attachment",filename="百科精选.txt")
-            msg.attach(att)
-          s=smtplib.SMTP_SSL(os.environ["SMTP"],int(os.environ["PORT"]))
-          s.login(os.environ["FROM"],os.environ["SECRET"])
-          s.send_message(msg)
-          s.quit()
-          print("✅ 文本推送发送完成")
+          from email.mime.text import MIMEText
+
+          msg = MIMEMultipart()
+          msg["From"] = os.environ["FROM"]
+          msg["To"] = os.environ["TO"]
+          msg["Subject"] = ""
+
+          with open("baike_full.txt","r",encoding="utf-8") as f:
+              txt = f.read()
+          part = MIMEText(txt, "plain", "utf-8")
+          msg.attach(part)
+
+          server = smtplib.SMTP_SSL(os.environ["SMTP"], int(os.environ["PORT"]))
+          server.login(os.environ["FROM"], os.environ["SECRET"])
+          server.send_message(msg)
+          server.quit()
+          print("✅ 全文推送成功")
           SEND
