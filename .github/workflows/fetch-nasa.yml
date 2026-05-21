@@ -1,4 +1,4 @@
-name: Fetch NASA Chinese
+name: Fetch NASA Full Articles
 
 on:
   schedule:
@@ -17,56 +17,73 @@ jobs:
           python-version: '3.11'
       
       - name: Install dependencies
-        run: pip install requests feedparser beautifulsoup4
+        run: pip install requests feedparser beautifulsoup4 html2text
       
-      - name: Fetch NASA articles
+      - name: Fetch NASA full articles
         run: |
           python3 << 'EOF'
           import requests
           import feedparser
+          from bs4 import BeautifulSoup
           from datetime import datetime
+          import time
           
-          # 尝试多个 RSS 源
-          rss_urls = [
-              "https://www.nasa.gov/rss/dyn/breaking_news.rss",
-              "https://rsshub.app/nasa",
-              "https://rsshub.app/nasa/breaking-news"
-          ]
+          rss_url = "https://www.nasa.gov/rss/dyn/breaking_news.rss"
           
-          articles = []
-          for url in rss_urls:
-              try:
-                  feed = feedparser.parse(url)
-                  if feed.entries:
-                      articles = feed.entries[:10]
-                      print(f"从 {url} 抓到 {len(articles)} 篇文章")
-                      break
-              except:
-                  continue
-          
-          if not articles:
-              print("所有 RSS 源都失败")
+          try:
+              feed = feedparser.parse(rss_url)
+              print(f"RSS 抓到 {len(feed.entries)} 篇文章")
+          except Exception as e:
+              print(f"RSS 失败: {e}")
               exit(1)
           
           html_content = f"""
           <html>
-          <head><meta charset="UTF-8"><title>NASA宇宙新闻</title></head>
+          <head><meta charset="UTF-8"><title>NASA 宇宙新闻 (全文)</title></head>
           <body>
-          <h1>NASA宇宙新闻</h1>
+          <h1>NASA 宇宙新闻 (全文)</h1>
           <p>生成时间: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}</p>
           """
           
-          for entry in articles:
+          headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+          
+          for i, entry in enumerate(feed.entries[:6]):  # 取前6篇，避免太长
               title = entry.get('title', '无标题')
               link = entry.get('link', '')
-              summary = entry.get('summary', entry.get('description', ''))
+              print(f"正在抓取: {title[:50]}...")
               
-              html_content += f"""
-              <h2>{title}</h2>
-              <p><a href="{link}">原文链接</a></p>
-              <div>{summary}</div>
-              <hr/>
-              """
+              try:
+                  # 抓取文章页面
+                  resp = requests.get(link, headers=headers, timeout=30)
+                  soup = BeautifulSoup(resp.text, 'html.parser')
+                  
+                  # NASA 文章的正文区域
+                  content = soup.find('div', class_='field-item even')
+                  if not content:
+                      content = soup.find('article')
+                  if not content:
+                      content = soup.find('div', class_='entry-content')
+                  if not content:
+                      content = soup.find('main')
+                  
+                  if content:
+                      # 移除脚本和样式
+                      for tag in content(['script', 'style', 'nav', 'header', 'footer', 'aside']):
+                          tag.decompose()
+                      text = content.get_text(separator='\n\n', strip=True)
+                      if len(text) > 8000:
+                          text = text[:8000] + "\n\n... 篇幅限制，完整内容请访问原文"
+                      html_content += f"<h2>{title}</h2><hr/>{text.replace(chr(10), '<br/>')}<br/><br/>"
+                      print(f"  成功: {len(text)} 字符")
+                  else:
+                      html_content += f"<h2>{title}</h2><hr/><p>无法提取正文</p><br/>"
+                      print(f"  失败: 找不到正文")
+                  
+                  time.sleep(1)  # 避免请求过快
+                  
+              except Exception as e:
+                  print(f"  错误: {e}")
+                  html_content += f"<h2>{title}</h2><hr/><p>抓取失败: {e}</p><br/>"
           
           html_content += "</body></html>"
           
@@ -101,13 +118,10 @@ jobs:
           from email import encoders
           from datetime import datetime
           
-          now = datetime.now()
-          date_str = now.strftime("%Y-%m-%d")
-          
           msg = MIMEMultipart()
           msg["From"] = os.environ["FROM"]
           msg["To"] = os.environ["TO"]
-          msg["Subject"] = "NASA宇宙新闻 " + date_str
+          msg["Subject"] = "NASA宇宙新闻 " + datetime.now().strftime("%Y-%m-%d")
           
           with open("nasa_articles.epub", "rb") as f:
               part = MIMEBase("application", "epub+zip")
@@ -119,10 +133,5 @@ jobs:
           with smtplib.SMTP_SSL(os.environ["SMTP"], int(os.environ["PORT"])) as server:
               server.login(os.environ["FROM"], os.environ["SECRET"])
               server.send_message(msg)
-          print("✅ NASA 文章已发送")
-          '          
-          with smtplib.SMTP_SSL(os.environ["SMTP"], int(os.environ["PORT"])) as server:
-              server.login(os.environ["FROM"], os.environ["SECRET"])
-              server.send_message(msg)
-          print("✅ NASA 文章已发送")
+          print("✅ NASA 全文已发送")
           '
