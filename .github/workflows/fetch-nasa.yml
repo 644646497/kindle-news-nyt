@@ -24,28 +24,39 @@ jobs:
           python3 << 'EOF'
           import requests
           import feedparser
-          from bs4 import BeautifulSoup
           from datetime import datetime
           
-          # 使用 RSSHub 的 NASA 路由（自带中文）
-          rss_url = "https://rsshub.app/nasa/breaking-news"
+          # 尝试多个 RSS 源
+          rss_urls = [
+              "https://www.nasa.gov/rss/dyn/breaking_news.rss",
+              "https://rsshub.app/nasa",
+              "https://rsshub.app/nasa/breaking-news"
+          ]
           
-          try:
-              feed = feedparser.parse(rss_url)
-              print(f"找到 {len(feed.entries)} 篇文章")
-          except Exception as e:
-              print(f"RSS 抓取失败: {e}")
+          articles = []
+          for url in rss_urls:
+              try:
+                  feed = feedparser.parse(url)
+                  if feed.entries:
+                      articles = feed.entries[:10]
+                      print(f"从 {url} 抓到 {len(articles)} 篇文章")
+                      break
+              except:
+                  continue
+          
+          if not articles:
+              print("所有 RSS 源都失败")
               exit(1)
           
           html_content = f"""
           <html>
-          <head><meta charset="UTF-8"><title>NASA 宇宙新闻</title></head>
+          <head><meta charset="UTF-8"><title>NASA宇宙新闻</title></head>
           <body>
-          <h1>NASA 宇宙新闻</h1>
+          <h1>NASA宇宙新闻</h1>
           <p>生成时间: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}</p>
           """
           
-          for entry in feed.entries[:10]:
+          for entry in articles:
               title = entry.get('title', '无标题')
               link = entry.get('link', '')
               summary = entry.get('summary', entry.get('description', ''))
@@ -90,10 +101,13 @@ jobs:
           from email import encoders
           from datetime import datetime
           
+          now = datetime.now()
+          date_str = now.strftime("%Y-%m-%d")
+          
           msg = MIMEMultipart()
           msg["From"] = os.environ["FROM"]
           msg["To"] = os.environ["TO"]
-          msg["Subject"] = f"NASA宇宙新闻 {datetime.now().strftime("%Y-%m-%d")}"
+          msg["Subject"] = "NASA宇宙新闻 " + date_str
           
           with open("nasa_articles.epub", "rb") as f:
               part = MIMEBase("application", "epub+zip")
@@ -102,6 +116,11 @@ jobs:
               part.add_header("Content-Disposition", "attachment", filename="nasa_articles.epub")
               msg.attach(part)
           
+          with smtplib.SMTP_SSL(os.environ["SMTP"], int(os.environ["PORT"])) as server:
+              server.login(os.environ["FROM"], os.environ["SECRET"])
+              server.send_message(msg)
+          print("✅ NASA 文章已发送")
+          '          
           with smtplib.SMTP_SSL(os.environ["SMTP"], int(os.environ["PORT"])) as server:
               server.login(os.environ["FROM"], os.environ["SECRET"])
               server.send_message(msg)
