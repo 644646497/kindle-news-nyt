@@ -35,10 +35,6 @@ class AdvancedUserRecipeTechNews(BasicNewsRecipe):
     def preprocess_html(self, soup):
         for a in soup.find_all('a'):
             a.decompose()
-        from calibre.utils.chinese_convert import t2s
-        for txt in soup.find_all(text=True):
-            if txt.parent.name not in ('script','style') and txt.strip():
-                txt.replace_with(t2s(txt))
         return soup
 
     feeds = [
