@@ -1,6 +1,6 @@
 name: Fetch Reuters Chinese News
 
-on:
+#on:
   workflow_dispatch:
 
 jobs:
