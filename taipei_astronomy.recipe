@@ -1,0 +1,44 @@
+import os
+import time
+import re
+import datetime
+from calibre.utils.chinese_conversion import to_simplified
+
+os.environ['TZ'] = 'Asia/Shanghai'
+time.tzset()
+
+class AdvancedUserRecipeTaipeiAstronomy(BasicNewsRecipe):
+    title = datetime.datetime.now().strftime('台北天文馆 - %Y-%m-%d %H-%M')
+    language = 'zh_CN'
+    oldest_article = 7
+    max_articles_per_feed = 15
+
+    no_summaries = True
+    use_embedded_content = True
+
+    remove_tags = [
+        dict(name='hr'),
+        dict(name='a', attrs={'href': re.compile(r'.*feedx.*')}),
+        dict(name='script'),
+        dict(name='style'),
+        dict(name='div', attrs={'class': ['sidebar', 'comment', 'ad', 'social']}),
+    ]
+
+    def preprocess_html(self, soup):
+        # 抓取正文内容
+        entry_content = soup.find('div', class_='entry-content')
+        if entry_content:
+            soup.body.clear()
+            soup.body.append(entry_content)
+
+        # 繁体自动转简体
+        for text_node in soup.find_all(text=True):
+            if text_node.parent.name not in ['script', 'style']:
+                simplified_text = to_simplified(text_node.string)
+                text_node.replace_with(simplified_text)
+
+        return soup
+
+    feeds = [
+        ('台北天文馆', 'https://technews.tw/author/台北天文馆/feed/'),
+    ]
