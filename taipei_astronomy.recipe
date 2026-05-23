@@ -2,6 +2,7 @@ import os
 import time
 import re
 import datetime
+from calibre.utils.text import traditional_to_simplified
 
 os.environ['TZ'] = 'Asia/Shanghai'
 time.tzset()
@@ -16,11 +17,37 @@ class AdvancedUserRecipeTechNews(BasicNewsRecipe):
     use_embedded_content = False
     auto_cleanup = True
 
+    # 精准过滤：标签、分类、侧边栏、广告、多余链接
     remove_tags = [
         dict(name='hr'),
         dict(name='script'),
         dict(name='style'),
+        dict(name='aside'),
+        dict(name='footer'),
+        dict(name='nav'),
+        dict(name='div', attrs={'class': ['tag', 'tags', 'category', 'categories', 'sidebar', 'ad', 'related', 'share', 'entry-meta']}),
+        dict(name='span', attrs={'class': ['tag', 'tags']}),
     ]
+
+    # 只保留正文主体区域
+    keep_only_tags = [
+        dict(name='h1'),
+        dict(name='div', attrs={'class': 'entry-content'}),
+    ]
+
+    def preprocess_html(self, soup):
+        # 1. 删掉所有a链接，避免乱抓标签链接
+        for a in soup.find_all('a'):
+            a.decompose()
+
+        # 2. 繁体全文转简体
+        all_text = soup.find_all(text=True)
+        for t in all_text:
+            if t.parent.name not in ['script', 'style']:
+                new_txt = traditional_to_simplified(t.string)
+                t.replace_with(new_txt)
+
+        return soup
 
     feeds = [
         ('科技新报全站', 'https://technews.tw/feed'),
