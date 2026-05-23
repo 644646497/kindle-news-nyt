@@ -6,14 +6,14 @@ import datetime
 os.environ['TZ'] = 'Asia/Shanghai'
 time.tzset()
 
-class AdvancedUserRecipeTaipeiAstronomy(BasicNewsRecipe):
-    title = datetime.datetime.now().strftime('台北天文馆 - %Y-%m-%d %H-%M')
+class AdvancedUserRecipeTechNews(BaseNewsRecipe):
+    title = datetime.datetime.now().strftime('科技新报 - %Y-%m-%d %H-%M')
     language = 'zh_CN'
     oldest_article = 1
     max_articles_per_feed = 15
 
     no_summaries = False
-    use_embedded_content = True
+    use_embedded_content = False
     auto_cleanup = True
 
     remove_tags = [
@@ -23,5 +23,5 @@ class AdvancedUserRecipeTaipeiAstronomy(BasicNewsRecipe):
     ]
 
     feeds = [
-        ('台北天文馆', 'https://technews.tw/author/台北天文馆/feed/'),
+        ('科技新报全站', 'https://technews.tw/feed'),
     ]
