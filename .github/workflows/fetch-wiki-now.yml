@@ -1,6 +1,6 @@
 name: Fetch Wikipedia Simplified
 
-on:
+#on:
   workflow_dispatch:
 
 jobs:
