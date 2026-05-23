@@ -9,25 +9,18 @@ time.tzset()
 class AdvancedUserRecipeTaipeiAstronomy(BasicNewsRecipe):
     title = datetime.datetime.now().strftime('台北天文馆 - %Y-%m-%d %H-%M')
     language = 'zh_CN'
-    oldest_article = 7
+    oldest_article = 1
     max_articles_per_feed = 15
 
-    no_summaries = True
+    no_summaries = False
     use_embedded_content = True
+    auto_cleanup = True
 
     remove_tags = [
         dict(name='hr'),
         dict(name='script'),
         dict(name='style'),
-        dict(name='div', attrs={'class': ['sidebar', 'comment', 'ad', 'social']}),
     ]
-
-    def preprocess_html(self, soup):
-        entry_content = soup.find('div', class_='entry-content')
-        if entry_content:
-            soup.body.clear()
-            soup.body.append(entry_content)
-        return soup
 
     feeds = [
         ('台北天文馆', 'https://technews.tw/author/台北天文馆/feed/'),
