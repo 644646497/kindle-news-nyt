@@ -1,0 +1,50 @@
+name: Send to Kindle - 台北天文馆
+
+on:
+  schedule:
+    - cron: '0 13 * * *'   # UTC 13:00 = 北京时间 21:00
+  workflow_dispatch:
+
+jobs:
+  send:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Calibre
+        run: sudo apt-get update && sudo apt-get install -y calibre
+
+      - name: Generate and Send
+        env:
+          FROM: ${{ secrets.FROM }}
+          TO: ${{ secrets.TO }}
+          SMTP: ${{ secrets.SMTP }}
+          PORT: ${{ secrets.PORT }}
+          SECRET: ${{ secrets.SECRET }}
+        run: |
+          ebook-convert taipei_astronomy.recipe taipei_astronomy.epub --output-profile kindle
+          
+          python3 -c '
+          import smtplib, os
+          from email.mime.multipart import MIMEMultipart
+          from email.mime.base import MIMEBase
+          from email import encoders
+          from datetime import datetime
+          
+          msg = MIMEMultipart()
+          msg["From"] = os.environ["FROM"]
+          msg["To"] = os.environ["TO"]
+          msg["Subject"] = f"台北天文馆 {datetime.now().strftime("%Y-%m-%d")}"
+          
+          with open("taipei_astronomy.epub", "rb") as f:
+              part = MIMEBase("application", "epub+zip")
+              part.set_payload(f.read())
+              encoders.encode_base64(part)
+              part.add_header("Content-Disposition", "attachment", filename="台北天文馆.epub")
+              msg.attach(part)
+          
+          with smtplib.SMTP_SSL(os.environ["SMTP"], int(os.environ["PORT"])) as server:
+              server.login(os.environ["FROM"], os.environ["SECRET"])
+              server.send_message(msg)
+          print("发送完成")
+          '
