@@ -2,6 +2,8 @@ import os
 import time
 import re
 import datetime
+from calibre.utils.localization import strftime
+from calibre.web.feeds.recipes.chinese import simplify_chinese
 
 os.environ['TZ'] = 'Asia/Shanghai'
 time.tzset()
@@ -33,8 +35,14 @@ class AdvancedUserRecipeTechNews(BasicNewsRecipe):
     ]
 
     def preprocess_html(self, soup):
+        # 删除所有链接
         for a in soup.find_all('a'):
             a.decompose()
+        # 繁体转简体
+        text_nodes = soup.find_all(text=True)
+        for node in text_nodes:
+            if node.parent.name not in ('script','style'):
+                node.replace_with(simplify_chinese(node.string))
         return soup
 
     feeds = [
