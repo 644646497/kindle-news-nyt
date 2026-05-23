@@ -6,7 +6,7 @@ import datetime
 os.environ['TZ'] = 'Asia/Shanghai'
 time.tzset()
 
-class AdvancedUserRecipeTechNews(BaseNewsRecipe):
+class AdvancedUserRecipeTechNews(BasicNewsRecipe):
     title = datetime.datetime.now().strftime('科技新报 - %Y-%m-%d %H-%M')
     language = 'zh_CN'
     oldest_article = 1
