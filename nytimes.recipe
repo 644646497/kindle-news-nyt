@@ -32,5 +32,5 @@ class AdvancedUserRecipe1281929027(BasicNewsRecipe):
         return soup
     
     feeds = [
-        ('纽约时报', 'https://raw.githubusercontent.com/644646497/rss/main/feed.xml'),
+        ('纽约时报', 'https://feedx.net/rss/nytimes.xml'),
     ]
