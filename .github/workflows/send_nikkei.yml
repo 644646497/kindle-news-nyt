@@ -28,16 +28,17 @@ from email.mime.base import MIMEBase
 from email import encoders
 from datetime import datetime
 
+now = datetime.now()
 msg = MIMEMultipart()
 msg["From"] = os.environ["FROM"]
 msg["To"] = os.environ["TO"]
-msg["Subject"] = "日经新闻 " + datetime.now().strftime("%Y-%m-%d")
+msg["Subject"] = f"日经新闻 {now.strftime("%Y-%m-%d %H:%M")}"
 
 with open("nikkei.epub", "rb") as f:
     part = MIMEBase("application", "epub+zip")
     part.set_payload(f.read())
     encoders.encode_base64(part)
-    part.add_header("Content-Disposition", "attachment", filename="nikkei.epub")
+    part.add_header("Content-Disposition", "attachment", filename=f"nikkei_{now.strftime("%Y%m%d_%H%M")}.epub")
     msg.attach(part)
 
 with smtplib.SMTP_SSL(os.environ["SMTP"], int(os.environ["PORT"])) as server:
