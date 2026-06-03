@@ -1,4 +1,5 @@
 import os,time,re,datetime
+from calibre.web.feeds.news import BasicNewsRecipe
 os.environ['TZ'] = 'Asia/Shanghai'
 time.tzset()
 
@@ -8,8 +9,19 @@ class AdvancedUserRecipeTechNews(BasicNewsRecipe):
     oldest_article = 1
     max_articles_per_feed = 15
     auto_cleanup = True
-    keep_only_tags = [dict(name='h1'),dict(name='div',attrs={'class':'entry-content'})]
-    remove_tags = [dict(n) for n in ('hr','script','style','aside','footer','nav')] + [
+
+    keep_only_tags = [
+        dict(name='h1'),
+        dict(name='div',attrs={'class':'entry-content'})
+    ]
+
+    remove_tags = [
+        dict(name='hr'),
+        dict(name='script'),
+        dict(name='style'),
+        dict(name='aside'),
+        dict(name='footer'),
+        dict(name='nav'),
         dict(name='div',attrs={'class':re.compile(r'tag|sidebar|ad|related|share|entry-meta')}),
         dict(name='span',attrs={'class':re.compile(r'tag|tags')})
     ]
@@ -22,8 +34,11 @@ class AdvancedUserRecipeTechNews(BasicNewsRecipe):
         return f'<p>{head}</p>'+html
 
     def preprocess_html(self,soup):
+        # 清除咖啡赞助、底部版权、多余尾巴
         for tag in soup.find_all(['a','div','p'],string=re.compile(r'咖啡|贊助|TechNews|downloaded by calibre|關鍵字|延伸閱讀')):
             tag.decompose()
+        for a in soup.find_all('a'):
+            a.decompose()
         return soup
 
     feeds = [('科技新报全站','https://technews.tw/feed')]
