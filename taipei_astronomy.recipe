@@ -1,8 +1,4 @@
-import os
-import time
-import re
-import datetime
-
+import os,time,re,datetime
 os.environ['TZ'] = 'Asia/Shanghai'
 time.tzset()
 
@@ -11,32 +7,23 @@ class AdvancedUserRecipeTechNews(BasicNewsRecipe):
     language = 'zh_CN'
     oldest_article = 1
     max_articles_per_feed = 15
-
-    no_summaries = False
-    use_embedded_content = False
     auto_cleanup = True
-
-    remove_tags = [
-        dict(name='hr'),
-        dict(name='script'),
-        dict(name='style'),
-        dict(name='aside'),
-        dict(name='footer'),
-        dict(name='nav'),
-        dict(name='div', attrs={'class': ['tag','tags','category','sidebar','ad','related','share','entry-meta']}),
-        dict(name='span', attrs={'class': ['tag','tags']}),
+    keep_only_tags = [dict(name='h1'),dict(name='div',attrs={'class':'entry-content'})]
+    remove_tags = [dict(n) for n in ('hr','script','style','aside','footer','nav')] + [
+        dict(name='div',attrs={'class':re.compile(r'tag|sidebar|ad|related|share|entry-meta')}),
+        dict(name='span',attrs={'class':re.compile(r'tag|tags')})
     ]
 
-    keep_only_tags = [
-        dict(name='h1'),
-        dict(name='div', attrs={'class': 'entry-content'}),
-    ]
+    def parse_article(self,art):
+        html = super().parse_article(art)
+        auth = art.author if art.author else ''
+        dt = art.pubdate.strftime('%b %d\n%Y-%m-%dT%H:%M:%SZ') if art.pubdate else ''
+        head = f'{art.feed.title}\n{dt}\n\n{auth}\n\n'
+        return f'<p>{head}</p>'+html
 
-    def preprocess_html(self, soup):
-        for a in soup.find_all('a'):
-            a.decompose()
+    def preprocess_html(self,soup):
+        for tag in soup.find_all(['a','div','p'],string=re.compile(r'咖啡|贊助|TechNews|downloaded by calibre|關鍵字|延伸閱讀')):
+            tag.decompose()
         return soup
 
-    feeds = [
-        ('科技新报全站', 'https://technews.tw/feed'),
-    ]
+    feeds = [('科技新报全站','https://technews.tw/feed')]
