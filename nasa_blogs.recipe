@@ -1,80 +1,119 @@
-import os, time, re, datetime
+import os, re, datetime
 from calibre.web.feeds.news import BasicNewsRecipe
 from calibre.ebooks.BeautifulSoup import BeautifulSoup
 
-class NasaBlogsRecipe(BasicNewsRecipe):
-    title = f'NASA Blogs - {datetime.datetime.now().strftime("%Y-%m-%d")}'
-    language = 'en'  # 英文内容
-    oldest_article = 7  # 抓取过去7天内的文章
-    max_articles_per_feed = 15  # 最多抓取15篇
+# 英译中 + 繁简统一为简体
+try:
+    from deep_translator import GoogleTranslator
+    translator = GoogleTranslator(source='en', target='zh-CN')
+    CAN_TRANSLATE = True
+except ImportError:
+    print("警告: 未安装 deep-translator，将保留英文原文。安装命令: pip install deep-translator")
+    CAN_TRANSLATE = False
+
+class NasaBlogsFullChineseRecipe(BasicNewsRecipe):
+    title = f'NASA 博客精选 - {datetime.datetime.now().strftime("%Y-%m-%d")}'
+    language = 'zh-CN'
+    oldest_article = 7
+    max_articles_per_feed = 10
     auto_cleanup = True
 
-    # 保留标题和正文区域 (这是针对“每篇文章详情页”的规则)
+    # 保留：标题 + 正文区域（NASA 博客结构）
     keep_only_tags = [
-        dict(name='h1'),  # 文章主标题
-        dict(name='div', attrs={'class': re.compile(r'entry-content|post-content|field-content')}),  # 正文区域
-        dict(name='article'),  # 整体文章容器
+        dict(name='h1'),                     # 文章标题
+        dict(name='div', attrs={'class': re.compile(r'entry-content|post-content|field-content|node__content')}),
+        dict(name='article'),                # 整篇文章容器
+        dict(name='div', attrs={'class': 'text-content'}),
     ]
 
-    # 移除侧边栏、分享按钮、页脚等噪音内容
+    # 移除所有干扰元素
     remove_tags = [
         dict(name='aside'), dict(name='nav'), dict(name='footer'), dict(name='header'),
-        dict(name='div', attrs={'class': re.compile(r'sidebar|share|meta|comments|related|tags'})),
-        dict(name='div', attrs={'class': re.compile(r'node__meta|field--name-field-tags')}),
-        dict(name='script'), dict(name='style'),
+        dict(name='div', attrs={'class': re.compile(r'sidebar|share|meta|comments|related|tags|author-bio'})),
+        dict(name='div', attrs={'class': re.compile(r'field--name-field-tags|node__meta'})),
+        dict(name='script'), dict(name='style'), dict(name='iframe'),
     ]
 
     def parse_index(self):
         """
-        主方法：解析博客列表页，提取每篇文章的链接和标题
+        从博客列表页提取所有文章链接
         """
         articles = []
         index_url = 'https://www.nasa.gov/blogs/'
         soup = self.index_to_soup(index_url)
 
-        # 1. 找到所有博客文章的链接 (在 <h2 class="node__title"> 下的 <a> 标签)
-        for post in soup.find_all('h2', class_='node__title'):
-            link_tag = post.find('a')
+        # NASA 博客列表页结构：每篇文章在 <article> 内，标题在 <h2 class="node__title">
+        for post in soup.find_all('article'):
+            title_tag = post.find('h2', class_='node__title')
+            if not title_tag:
+                continue
+            
+            link_tag = title_tag.find('a')
             if not link_tag:
                 continue
 
             article_url = link_tag.get('href')
-            # 确保是完整的URL
             if article_url.startswith('/'):
                 article_url = 'https://www.nasa.gov' + article_url
 
             title = self.tag_to_string(link_tag)
-            date_tag = post.find_parent('article').find('time') if post.find_parent('article') else None
-            date_str = date_tag.get('datetime') if date_tag else ''
 
-            # 2. 可选：根据日期过滤 (如果需要)
-            # pub_date = self.parse_date(date_str) if date_str else None
+            # 尝试获取发布日期
+            date_tag = post.find('time')
+            date_str = date_tag.get('datetime', '') if date_tag else ''
 
-            # 3. 创建文章条目格式 (feed, title, url, date, description)
-            articles.append(('NASA Blogs', title, article_url, date_str, ''))
+            articles.append(('NASA 博客', title, article_url, date_str, ''))
             if len(articles) >= self.max_articles_per_feed:
                 break
 
-        # 按日期排序 (最新的在前)
-        # articles.sort(key=lambda x: x[3], reverse=True)
-
-        # 4. 返回符合 calibre 要求的 feeds 结构
-        return [(feed_name, articles) for feed_name, articles in [('NASA Blogs', articles)]]
+        # 返回 Calibre 需要的 feeds 格式
+        return [(feed_name, articles) for feed_name, articles in [('NASA 博客', articles)]]
 
     def preprocess_html(self, soup):
         """
-        预处理单篇文章页面：移除页面的页眉页脚等全局噪音
+        预处理单篇文章：移除全局导航栏
         """
-        # 移除 NASA 的全局导航栏
-        for nav in soup.find_all(['header', 'footer', 'nav', 'div'], class_=re.compile(r'header|footer|nav')):
-            nav.decompose()
+        for tag in soup.find_all(['header', 'footer', 'nav'], class_=re.compile(r'header|footer|global')):
+            tag.decompose()
+        # 移除"分享到 Twitter"等按钮
+        for div in soup.find_all('div', class_=re.compile(r'social-share|addtoany')):
+            div.decompose()
         return soup
 
     def postprocess_html(self, soup, first_fetch):
         """
-        后处理：清理多余的空白
+        后处理：将英文全文翻译为简体中文
         """
-        for tag in soup.find_all(['div', 'p']):
-            if not tag.get_text(strip=True):
-                tag.decompose()
+        if not CAN_TRANSLATE:
+            return soup
+
+        # 只翻译正文容器内的文本，避免翻译页面标题等噪音
+        content_containers = soup.find_all(['div', 'article'], 
+                                            class_=re.compile(r'entry-content|post-content|field-content|node__content'))
+        
+        if not content_containers:
+            # 如果没找到特定容器，则翻译整个 body
+            content_containers = [soup.body] if soup.body else [soup]
+
+        for container in content_containers:
+            # 遍历所有文本段落（避免一次性翻译整个页面导致超时/超长）
+            paragraphs = container.find_all(['p', 'h2', 'h3', 'h4', 'li', 'figcaption'])
+            for p in paragraphs:
+                original = p.get_text(strip=True)
+                if len(original) < 20:  # 太短的文本（如"Read more"）不翻译
+                    continue
+                if not re.search(r'[a-zA-Z]{3,}', original):  # 没有英文的不翻译
+                    continue
+                try:
+                    translated = translator.translate(original)
+                    if translated and translated != original:
+                        p.string = translated  # 直接替换文本内容
+                except Exception as e:
+                    print(f"翻译失败（跳过）: {str(e)[:50]}")
+                    continue
+
         return soup
+
+    # 可选：移除 Calibre 自动添加的尾巴
+    def get_article_url(self, article):
+        return article[2]
