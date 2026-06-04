@@ -1,71 +1,94 @@
 import os, time, re, datetime
 from calibre.web.feeds.news import BasicNewsRecipe
+from calibre.ebooks.BeautifulSoup import BeautifulSoup
 
 # 引入繁简转换库
 try:
     from opencc import OpenCC
-    cc = OpenCC('t2s') # t2s: Traditional to Simplified
-    HAS_OPENCC = True
+    # t2s = Traditional to Simplified (繁体转简体)
+    cc = OpenCC('t2s')
+    CAN_CONVERT = True
 except ImportError:
-    HAS_OPENCC = False
+    print("警告: 未找到 opencc 库，将跳过繁简转换。")
+    CAN_CONVERT = False
 
-class TechNewsRecipe(BasicNewsRecipe):
-    title = '科技新报 (TechNews)'
-    language = 'zh_CN'
+os.environ['TZ'] = 'Asia/Shanghai'
+time.tzset()
+
+class AdvancedUserRecipeTechNews(BasicNewsRecipe):
+    title = datetime.datetime.now().strftime('科技新报(简体版) - %Y-%m-%d')
+    language = 'zh_CN'  # 设置为简体中文区域
     oldest_article = 1
     max_articles_per_feed = 15
-    
-    # 【修改1】移除 auto_cleanup = True，防止自动清理机制与手动规则冲突
-    remove_empty_feeds = True
+    auto_cleanup = True
+    auto_cleanup_keep = '//h1|//div[@class="entry-content"]'
 
-    # 【修改2】核心清理逻辑：放宽匹配条件，覆盖更多可能的正文 class 或 id
+    # 核心保留标签：只保留标题和正文内容区
     keep_only_tags = [
-        dict(name='h1', attrs={'class': re.compile(r'post-title|entry-title', re.I)}),
-        dict(name='div', attrs={'class': re.compile(r'post-content|entry-content|article-body|single-post-content|article-content', re.I)}),
-        dict(name='div', attrs={'id': re.compile(r'post-content|entry-content|article-body', re.I)})
+        dict(name='h1'),
+        dict(name='div', attrs={'class': 'entry-content'})
     ]
 
-    # 【修改3】移除不需要的元素（优化正则，防止误杀正文容器）
+    # 基础移除标签
     remove_tags = [
-        dict(name=['script', 'style', 'iframe', 'form']),
-        dict(name='div', attrs={'id': re.compile(r'^(comment|related|sidebar|ad|share)', re.I)}),
-        dict(name='div', attrs={'class': re.compile(r'^(comment|related|sidebar|author-bio|post-nav)', re.I)}),
-        dict(name='nav'),
-        dict(name='footer'),
-        dict(name='aside'),
         dict(name='hr'),
-        # 移除所有的超链接，防止点击跳转或出现蓝色文字
-        dict(name='a')
+        dict(name='script'),
+        dict(name='style'),
+        dict(name='aside'),
+        dict(name='footer'),
+        dict(name='nav'),
+        dict(name='header'),
+        dict(name='form'),
+        dict(name='iframe'),
+        # 移除包含特定关键词的元素 (如广告、分享按钮)
+        dict(name='div', attrs={'class': re.compile(r'tag|sidebar|ad|related|share|entry-meta|author-box')}),
     ]
 
     def preprocess_html(self, soup):
-        # 【修改4】增加调试日志，方便在 GitHub Actions 中查看匹配情况
-        content_divs = soup.find_all('div', attrs={'class': re.compile(r'post-content|entry-content|article-body|single-post-content|article-content', re.I)})
-        print(f"=== [Debug] 找到 {len(content_divs)} 个疑似正文的 div 标签 ===")
+        """
+        预处理 HTML：清理页面底部的尾巴、赞助商图片和链接
+        """
+        # 1. 强力清理底部版权信息 ("This article was downloaded by calibre...")
+        # Calibre 会自动添加这个，我们通过查找特定文本将其删除
+        for tag in soup.find_all(text=re.compile(r'This article was downloaded by calibre')):
+            parent = tag.parent
+            if parent:
+                parent.decompose()
 
-        # 1. 移除特定的“咖啡赞助”图片和文字
-        for img in soup.find_all('img'):
-            src = img.get('src', '')
-            if 'coffee' in src.lower() or 'sponsor' in src.lower():
-                img.decompose()
+        # 2. 清理“喝咖啡”赞助相关的图片和文字
+        # 查找包含 "想請我們喝幾杯咖啡" 或 "贊助" 的段落并删除
+        for tag in soup.find_all(string=re.compile(r'喝咖啡|贊助|Support us')):
+            # 向上查找父级 div 或 p 标签进行删除，确保删干净
+            p = tag.find_parent(['div', 'p', 'section'])
+            if p:
+                p.decompose()
 
-        # 2. 移除包含特定关键词的段落（针对文末尾巴）
-        keywords_to_remove = ['延伸閱讀', '留給我們的話', 'downloaded by calibre', 'Section menu']
-        for tag in soup.find_all(['p', 'div', 'span']):
-            text = tag.get_text(strip=True)
-            if any(kw in text for kw in keywords_to_remove):
-                tag.decompose()
+        # 3. 清理所有指向 technews.tw 首页或赞助页面的链接 (通常是那个咖啡杯 Logo)
+        for a in soup.find_all('a', href=re.compile(r'technews\.tw/$|buycoffee')):
+            a.decompose()
+
+        # 4. 清理图片中的赞助 Logo (如果它是独立的 img 标签且 src 包含 coffee)
+        for img in soup.find_all('img', src=re.compile(r'coffee|donate')):
+            img.decompose()
 
         return soup
 
     def postprocess_html(self, soup, first_fetch):
-        # 3. 执行繁简转换
-        if HAS_OPENCC:
-            for element in soup.find_all(string=True):
-                if element.strip():
-                    # 检查是否包含繁体字特征，避免重复转换或转换英文
-                    if re.search(r'[\u4e00-\u9fff]', element):
-                        element.replace_with(cc.convert(element))
+        """
+        后处理：将繁体中文转换为简体中文
+        """
+        if not CAN_CONVERT:
+            return soup
+
+        # 遍历所有文本节点进行转换
+        # 注意：直接修改 soup 的 string 属性
+        for element in soup.find_all(string=True):
+            original_text = str(element)
+            # 简单的判断，如果有繁体字特征则转换，或者直接全量转换
+            converted_text = cc.convert(original_text)
+            if converted_text != original_text:
+                element.replace_with(converted_text)
+
         return soup
 
     feeds = [('科技新报全站', 'https://technews.tw/feed')]
