@@ -1,4 +1,4 @@
-name: Send to Kindle - 台北天文馆
+name: Send to Kindle - TechNews (科技新报)
 
 on:
   schedule:
@@ -11,8 +11,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Calibre
-        run: sudo apt-get update && sudo apt-get install -y calibre
+      - name: Install Dependencies & Calibre
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y calibre
+          # 安装繁简转换库，配合 Recipe 中的 opencc 使用
+          pip install opencc-python-reimplemented
 
       - name: Generate and Send
         env:
@@ -22,27 +26,32 @@ jobs:
           PORT: ${{ secrets.PORT }}
           SECRET: ${{ secrets.SECRET }}
         run: |
-          ebook-convert taipei_astronomy.recipe taipei_astronomy.epub --output-profile kindle
-          
+          # 1. 生成电子书 (输入是 taipei_astronomy.recipe，输出改为 technews.epub)
+          ebook-convert taipei_astronomy.recipe technews.epub --output-profile kindle
+
+          # 2. 发送邮件
           python3 -c '
           import smtplib, os
           from email.mime.multipart import MIMEMultipart
           from email.mime.base import MIMEBase
           from email import encoders
           from datetime import datetime
-          
+
           msg = MIMEMultipart()
           msg["From"] = os.environ["FROM"]
           msg["To"] = os.environ["TO"]
-          msg["Subject"] = f"台北天文馆 {datetime.now().strftime("%Y-%m-%d")}"
-          
-          with open("taipei_astronomy.epub", "rb") as f:
+          # 修改邮件标题
+          msg["Subject"] = f"科技新报 {datetime.now().strftime("%Y-%m-%d")}"
+
+          # 读取生成的 epub 文件
+          with open("technews.epub", "rb") as f:
               part = MIMEBase("application", "epub+zip")
               part.set_payload(f.read())
               encoders.encode_base64(part)
-              part.add_header("Content-Disposition", "attachment", filename="台北天文馆.epub")
+              # 修改附件显示的文件名
+              part.add_header("Content-Disposition", "attachment", filename="科技新报.epub")
               msg.attach(part)
-          
+
           with smtplib.SMTP_SSL(os.environ["SMTP"], int(os.environ["PORT"])) as server:
               server.login(os.environ["FROM"], os.environ["SECRET"])
               server.send_message(msg)
