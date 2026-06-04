@@ -1,39 +1,78 @@
-import os, time, re, datetime
+import os, time, datetime, re
 from calibre.web.feeds.news import BasicNewsRecipe
 
+# 设置时区
 os.environ['TZ'] = 'Asia/Shanghai'
 time.tzset()
 
-class NasaChineseNews(BasicNewsRecipe):
-    title = datetime.datetime.now().strftime('NASA 中文前沿资讯 - %Y-%m-%d')
-    language = 'zh_CN'
-    oldest_article = 2  # 抓取最近2天的新闻
-    max_articles_per_feed = 10  # 每次最多抓取10篇，避免 Kindle 文件过大
+class NasaOfficialChinese(BasicNewsRecipe):
+    title = 'NASA Official News (Translated to Chinese)'
+    language = 'zh-CN'
+    oldest_article = 7  # 抓取最近7天的新闻
+    max_articles_per_feed = 10  # 每次最多抓取10篇，防止超时
     auto_cleanup = True
+    delay = 3  # 关键！每次请求间隔3秒，防止被NASA官网封IP
     
-    # 核心保留标签：只保留标题和正文内容区
+    # 伪装成真实的 Chrome 浏览器
+    browser_user_agent = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+
+    # 只保留标题和正文，去除侧边栏等干扰
     keep_only_tags = [
-        dict(name='h1'),
-        dict(name='div', attrs={'class': re.compile(r'content|article-body|text')}),
-        dict(name='article')
+        dict(name='h1'), 
+        dict(name='div', attrs={'class': 'content'})
     ]
-
-    # 基础移除标签：剔除广告、导航、评论区等
+    
+    # 移除不需要的标签（广告、分享按钮、推荐阅读等）
     remove_tags = [
-        dict(name='script'),
-        dict(name='style'),
-        dict(name='aside'),
-        dict(name='footer'),
-        dict(name='nav'),
-        dict(name='header'),
-        dict(name='form'),
+        dict(name='script'), 
+        dict(name='style'), 
         dict(name='iframe'),
-        dict(name='div', attrs={'class': re.compile(r'ad|sidebar|share|comment|related|recommend')}),
+        dict(name='nav'),
+        dict(name='footer'),
+        # 移除 NASA 官网特定的干扰区域
+        dict(name='div', attrs={'id': re.compile(r'header|footer|sidebar|explore|newsletter')}),
+        dict(name='div', attrs={'class': re.compile(r'header|footer|sidebar|explore|newsletter|share-tools')}),
     ]
 
-    # 使用国内权威媒体的 RSS 源（它们会翻译 NASA 的最新动态）
+    # NASA 官网的新闻 RSS 地址
     feeds = [
-        ('澎湃新闻-科学', 'https://rsshub.app/thepaper/channel/25950'),  # 澎湃科学频道
-        ('中科院物理所', 'https://rsshub.app/cas/sim/kydt'),          # 中科院物理所动态
-        ('新浪科技-天文', 'https://rsshub.app/sina/rollnews/tech/astro') # 新浪天文新闻
+        ('NASA News', 'https://www.nasa.gov/feeds/nasa-newsroom/'),
     ]
+
+    # --- 以下是自动翻译的核心逻辑 ---
+    def getTranslatedText(self, text):
+        if not text:
+            return ""
+        # 简单的翻译函数，调用免费的翻译接口
+        # 注意：在 GitHub Actions 环境中，网络可能会偶尔不稳定
+        try:
+            import urllib.parse
+            import urllib.request
+            import json
+            
+            # 使用 Google 翻译的简易接口（无需 API Key，但大规模使用可能会失效）
+            url = "https://translate.googleapis.com/translate_a/single?client=gtx&sl=en&tl=zh-CN&dt=t&q="
+            full_url = url + urllib.parse.quote(text)
+            
+            req = urllib.request.Request(full_url)
+            req.add_header('User-Agent', self.browser_user_agent)
+            
+            with urllib.request.urlopen(req, timeout=10) as response:
+                result = json.loads(response.read().decode('utf-8'))
+                # 提取翻译结果
+                translated = ''.join([sentence[0] for sentence in result[0]])
+                return translated
+        except Exception as e:
+            # 如果翻译失败，返回原文并打印错误
+            print(f"Translation failed for text: {text[:50]}... Error: {e}")
+            return text
+
+    def preprocess_html(self, soup):
+        # 遍历所有文本节点并进行翻译
+        # 这是一个简化版处理，主要针对 <p> 段落和 <h1> 标题
+        for tag in soup.find_all(['p', 'h1', 'h2', 'h3', 'li']):
+            if tag.string and len(tag.string) > 20: # 只翻译长度大于20的文本，避免翻译短词出错
+                original_text = tag.string
+                translated_text = self.getTranslatedText(original_text)
+                tag.string.replace_with(translated_text)
+        return soup
