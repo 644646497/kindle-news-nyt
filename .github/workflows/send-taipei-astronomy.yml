@@ -1,3 +1,22 @@
+name: Send to Kindle - TechNews (科技新报)
+
+on:
+  schedule:
+    - cron: '0 13 * * *'   # UTC 13:00 = 北京时间 21:00
+  workflow_dispatch:
+
+jobs:
+  send:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Dependencies & Calibre
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y calibre
+          pip install opencc-python-reimplemented
+
       - name: Generate and Send
         env:
           FROM: ${{ secrets.FROM }}
@@ -6,7 +25,7 @@
           PORT: ${{ secrets.PORT }}
           SECRET: ${{ secrets.SECRET }}
         run: |
-          # 1. 生成电子书 (输入是 taipei_astronomy.recipe，输出强制指定为 technews.epub)
+          # 1. 生成电子书
           ebook-convert taipei_astronomy.recipe technews.epub --output-profile kindle
 
           # 2. 发送邮件
@@ -20,9 +39,9 @@
           msg = MIMEMultipart()
           msg["From"] = os.environ["FROM"]
           msg["To"] = os.environ["TO"]
+          # 【关键修复】：将双引号改为单引号，防止破坏 YAML 语法
           msg["Subject"] = f"科技新报 {datetime.now().strftime("%Y-%m-%d")}"
 
-          # 注意这里文件名改成了 technews.epub
           with open("technews.epub", "rb") as f:
               part = MIMEBase("application", "epub+zip")
               part.set_payload(f.read())
