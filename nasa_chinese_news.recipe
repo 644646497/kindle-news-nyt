@@ -8,12 +8,14 @@ class NasaNewsOfficial(BasicNewsRecipe):
     title = 'NASA Official News (CN)'
     language = 'zh-CN'
     oldest_article = 7
-    max_articles_per_feed = 10  # 限制数量，防止文件过大
     
-    # --- 核心：图片压缩，解决 Gmail 552 报错 ---
-    scale_news_images = (800, 800)      # 图片最大 800x800
+    # --- 核心修改 1：减少文章数量，防止文件过大 ---
+    max_articles_per_feed = 5  
+    
+    # --- 核心修改 2：强力图片压缩，解决 Gmail 552 报错 ---
+    scale_news_images = (600, 600)      # 图片最大 600x600，极大减小体积
     scale_news_images_to_device = True  # 自动适配 Kindle 屏幕
-    no_imgurize_articles = True         # 禁止文字转图片（极大减小体积）
+    no_imgurize_articles = True         # 禁止文字转图片（防止体积暴增）
     
     # --- 抓取设置 ---
     delay = 2
@@ -21,7 +23,7 @@ class NasaNewsOfficial(BasicNewsRecipe):
     remove_javascript = True
     remove_empty_feeds = True
     
-    # 移除干扰元素
+    # --- 核心修改 3：移除干扰元素和隐藏大文件 ---
     remove_tags = [
         dict(name='script'),
         dict(name='style'),
@@ -29,13 +31,14 @@ class NasaNewsOfficial(BasicNewsRecipe):
         dict(name='nav'),
         dict(name='footer'),
         dict(name='header'),
-        dict(name='div', attrs={'class': lambda x: x and ('share' in x or 'related' in x or 'newsletter' in x)}),
+        dict(name='img', attrs={'src': lambda x: x and ('logo' in x or 'icon' in x or 'banner' in x)}), # 移除无关小图或大横幅
+        dict(name='div', attrs={'class': lambda x: x and ('share' in x or 'related' in x or 'newsletter' in x or 'sidebar' in x)}),
     ]
 
     def parse_index(self):
         articles = []
         # NASA 官方 WP-JSON 接口，最稳定
-        json_url = 'https://www.nasa.gov/wp-json/nasa/v1/items?per_page=10&offset=0&type[]=news'
+        json_url = 'https://www.nasa.gov/wp-json/nasa/v1/items?per_page=5&offset=0&type[]=news'
         
         try:
             req = urllib.request.Request(json_url)
@@ -53,7 +56,7 @@ class NasaNewsOfficial(BasicNewsRecipe):
                 if not url or not title:
                     continue
 
-                # 翻译（带容错）
+                # 翻译（带容错，防止翻译接口挂掉导致整个抓取失败）
                 try:
                     trans_title = self.translate(title)
                     trans_summary = self.translate(summary)
