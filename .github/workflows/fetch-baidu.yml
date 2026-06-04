@@ -1,4 +1,4 @@
-name: Fetch Baidu Baike to Kindle
+name: Fetch Baidu Baike with Selenium
 
 on:
   workflow_dispatch:
@@ -11,16 +11,24 @@ jobs:
       
       - name: Install Dependencies
         run: |
-          sudo apt-get update && sudo apt-get install -y pandoc
-          pip install requests beautifulsoup4
-      
+          # 安装 Python 依赖
+          pip install selenium beautifulsoup4 requests opencc-python-reimplemented
+          
+          # 安装 Chrome 浏览器和驱动
+          sudo apt-get update
+          sudo apt-get install -y wget gnupg
+          wget -q -O - https://dl-ssl.google.com/linux/linux_signing_key.pub | sudo apt-key add -
+          echo "deb [arch=amd64] http://dl.google.com/linux/chrome/deb/ stable main" | sudo tee /etc/apt/sources.list.d/google-chrome.list
+          sudo apt-get update
+          sudo apt-get install -y google-chrome-stable
+
       - name: Fetch Baidu Baike Article
         run: |
           # 运行 Python 脚本抓取“宇宙”词条
           python3 baidu_spider.py
           
-          # 将抓取到的纯文本转换为 EPUB
-          pandoc baidu_article.txt -o baidu_article.epub --metadata title="百度百科-宇宙"
+          # 使用 Pandoc 将 HTML 转换为 EPUB
+          pandoc baidu_article.html -o baidu_article.epub --metadata title="百度百科-宇宙"
           
       - name: Send to Kindle
         env:
