@@ -1,35 +1,101 @@
 import re, datetime
 from calibre.web.feeds.news import BasicNewsRecipe
 
-class NasaSimpleRecipe(BasicNewsRecipe):
-    title = f'NASA 新闻 - {datetime.datetime.now().strftime("%Y-%m-%d")}'
+try:
+    from deep_translator import GoogleTranslator
+    translator = GoogleTranslator(source='en', target='zh-CN')
+    CAN_TRANSLATE = True
+except ImportError:
+    CAN_TRANSLATE = False
+
+class NasaRSSChineseRecipe(BasicNewsRecipe):
+    title = f'NASA 新闻精选 - {datetime.datetime.now().strftime("%Y-%m-%d")}'
     language = 'zh-CN'
+    
     oldest_article = 7
-    max_articles_per_feed = 10
+    max_articles_per_feed = 10   # 可以恢复10篇，因为没图片文件很小
+    auto_cleanup = True
+    no_stylesheets = False
     
-    # 🔧 不设置 keep_only_tags，保留所有内容
-    # 🔧 不设置 remove_tags
-    
-    feeds = [
-        ('NASA 新闻', 'https://www.nasa.gov/news-release/feed/'),
+    keep_only_tags = [
+        dict(name='h1'),
+        dict(name='h2'),
+        dict(name='main'),
+        dict(name='article'),
+        dict(name='body'),
     ]
     
+    # 🔧 关键：删除所有图片
+    remove_tags = [
+        dict(name='img'),          # 删除所有图片标签
+        dict(name='picture'),      # 删除 picture 标签
+        dict(name='figure'),       # 删除 figure 容器
+        dict(name='figcaption'),   # 删除图片说明
+        dict(name='aside'), 
+        dict(name='nav'), 
+        dict(name='footer'),
+        dict(name='script'), 
+        dict(name='style'),
+        dict(name='iframe'),
+        dict(name='form'),
+        dict(name='svg'),          # 删除矢量图
+        dict(name='canvas'),
+    ]
+    
+    # 额外移除包含图片的 div
+    remove_tags_after = [
+        dict(name='div', attrs={'class': re.compile(r'image|photo|gallery|slideshow', re.I)}),
+        dict(name='div', attrs={'id': re.compile(r'image|photo|gallery', re.I)}),
+    ]
+    
+    feeds = [
+        ('NASA 新闻发布', 'https://www.nasa.gov/news-release/feed/'),
+        ('NASA 博客', 'https://www.nasa.gov/blogs/feed/'),
+    ]
+    
+    def preprocess_html(self, soup):
+        """预处理：删除图片和噪音"""
+        # 删除所有 img 标签（双重保险）
+        for img in soup.find_all('img'):
+            img.decompose()
+        
+        # 删除页头页脚
+        for tag in soup.find_all(['header', 'footer', 'nav']):
+            tag.decompose()
+        
+        # 删除包含 "image" 的容器
+        for div in soup.find_all('div', class_=re.compile(r'image|media|photo', re.I)):
+            div.decompose()
+        
+        return soup
+    
     def postprocess_html(self, soup, first_fetch):
-        """翻译所有可见文本"""
-        try:
-            from deep_translator import GoogleTranslator
-            translator = GoogleTranslator(source='en', target='zh-CN')
+        """翻译为简体中文"""
+        if not CAN_TRANSLATE:
+            return soup
+        
+        body_container = soup.find('main') or soup.find('article') or soup.body or soup
+        
+        # 翻译所有文本标签
+        for tag in body_container.find_all(['h1', 'h2', 'h3', 'h4', 'p', 'li']):
+            original = tag.get_text(strip=True)
             
-            for tag in soup.find_all(['h1', 'h2', 'p']):
-                text = tag.get_text(strip=True)
-                if 15 < len(text) < 500 and re.search(r'[a-zA-Z]{3,}', text):
-                    if not re.search(r'[\u4e00-\u9fff]', text):
-                        try:
-                            translated = translator.translate(text)
-                            if translated:
-                                tag.string = translated
-                        except:
-                            pass
-        except:
-            pass
+            if len(original) < 15:
+                continue
+            if not re.search(r'[a-zA-Z]{3,}', original):
+                continue
+            if re.search(r'[\u4e00-\u9fff]', original):
+                continue
+            
+            try:
+                translated = translator.translate(original)
+                if translated and len(translated) > 5:
+                    if len(tag.contents) == 1:
+                        tag.string = translated
+                    else:
+                        tag.clear()
+                        tag.append(translated)
+            except Exception:
+                continue
+        
         return soup
