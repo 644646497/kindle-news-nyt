@@ -9,25 +9,46 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       
-      - name: Install pandoc
-        run: sudo apt-get update && sudo apt-get install -y pandoc
+      - name: Install Dependencies
+        run: |
+          sudo apt-get update && sudo apt-get install -y pandoc
+          # 安装繁简转换库，作为双重保险
+          pip install opencc-python-reimplemented
       
-      - name: Fetch Chinese Wikipedia simplified articles
+      - name: Fetch and Convert to Simplified
         run: |
           # 定义要抓取的词条（格式：中文名|英文文件名）
           ARTICLES="黑洞|black_hole,宇宙大爆炸|big_bang,暗物质|dark_matter,量子力学|quantum_mechanics"
           
           mkdir -p wiki_pages
           
-          # 遍历抓取，强制使用 zh-cn (简体中文)
+          # 1. 遍历抓取，强制使用 zh-cn (简体中文)
           for entry in $(echo $ARTICLES | tr "," "\n"); do
             CN_NAME=$(echo $entry | cut -d'|' -f1)
             FILE_NAME=$(echo $entry | cut -d'|' -f2)
-            echo "正在抓取简体版: $CN_NAME"
+            echo "正在抓取: $CN_NAME"
             curl -s "https://zh.wikipedia.org/api/rest_v1/page/html/${CN_NAME}?variant=zh-cn" > "wiki_pages/${FILE_NAME}.html"
           done
           
-          # 使用 Pandoc 生成 EPUB，并自动生成目录
+          # 2. 使用 opencc 对所有下载的 HTML 进行繁体转简体清洗
+          echo "正在执行繁简转换清洗..."
+          python3 -c '
+          import os
+          from opencc import OpenCC
+          cc = OpenCC("t2s")
+          folder = "wiki_pages"
+          for filename in os.listdir(folder):
+              if filename.endswith(".html"):
+                  filepath = os.path.join(folder, filename)
+                  with open(filepath, "r", encoding="utf-8") as f:
+                      content = f.read()
+                  simplified_content = cc.convert(content)
+                  with open(filepath, "w", encoding="utf-8") as f:
+                      f.write(simplified_content)
+          print("✅ 所有页面已转换为简体中文")
+          '
+          
+          # 3. 使用 Pandoc 生成 EPUB，并自动生成目录
           pandoc wiki_pages/*.html -o wiki_articles.epub \
             --metadata title="维基百科科学词条(简体版)" \
             --toc \
@@ -51,7 +72,6 @@ jobs:
           msg = MIMEMultipart()
           msg["From"] = os.environ["FROM"]
           msg["To"] = os.environ["TO"]
-          # 【关键修复】：使用单引号包裹日期格式，防止 YAML 解析错误
           msg["Subject"] = "维基百科科学词条(简体版) " + datetime.now().strftime("%Y-%m-%d")
           
           with open("wiki_articles.epub", "rb") as f:
