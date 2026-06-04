@@ -15,6 +15,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y calibre
+          # 安装繁简转换库，配合 Recipe 中的 opencc 使用
           pip install opencc-python-reimplemented
 
       - name: Generate and Send
@@ -25,7 +26,7 @@ jobs:
           PORT: ${{ secrets.PORT }}
           SECRET: ${{ secrets.SECRET }}
         run: |
-          # 1. 生成电子书
+          # 1. 生成电子书 (输入是 taipei_astronomy.recipe，输出改为 technews.epub)
           ebook-convert taipei_astronomy.recipe technews.epub --output-profile kindle
 
           # 2. 发送邮件
@@ -39,13 +40,15 @@ jobs:
           msg = MIMEMultipart()
           msg["From"] = os.environ["FROM"]
           msg["To"] = os.environ["TO"]
-          # 【关键修复】：将双引号改为单引号，防止破坏 YAML 语法
+          # 修改邮件标题
           msg["Subject"] = f"科技新报 {datetime.now().strftime("%Y-%m-%d")}"
 
+          # 读取生成的 epub 文件
           with open("technews.epub", "rb") as f:
               part = MIMEBase("application", "epub+zip")
               part.set_payload(f.read())
               encoders.encode_base64(part)
+              # 修改附件显示的文件名
               part.add_header("Content-Disposition", "attachment", filename="科技新报.epub")
               msg.attach(part)
 
