@@ -1,73 +1,57 @@
-import os, time, json, urllib.request, urllib.parse
+import os, time, datetime
 from calibre.web.feeds.news import BasicNewsRecipe
 
-class NasaOfficialTranslated(BasicNewsRecipe):
-    title = 'NASA News (CN)'
+os.environ['TZ'] = 'Asia/Shanghai'
+time.tzset()
+
+class NasaBlogsChinese(BasicNewsRecipe):
+    title = 'NASA News (Translated)'
     language = 'zh-CN'
     oldest_article = 7
     max_articles_per_feed = 15
-    delay = 2  # 每次请求间隔2秒，防止被封
-    auto_cleanup = True
+    delay = 2  # 礼貌爬取，间隔2秒
 
-    # 使用 NASA 官方最新的 Breaking News API
+    # ✅ 核心修改：使用 NASA 官方博客聚合源
     feeds = [
-        ('NASA Breaking News', 'https://www.nasa.gov/api/breaking-news.json'),
+        ('NASA Official Blogs', 'https://blogs.nasa.gov/feed/'),
     ]
 
     def parse_index(self):
         articles = []
         try:
-            # 伪装成浏览器访问 API
-            req = urllib.request.Request(self.feeds[0][1])
-            req.add_header('User-Agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36')
-
-            with urllib.request.urlopen(req, timeout=10) as response:
-                data = json.loads(response.read().decode('utf-8'))
-
-            # NASA API 返回的是列表，我们需要遍历它
-            for item in data.get('collection', {}).get('items', []):
-                title = item.get('data', [{}])[0].get('title', 'No Title')
-                description = item.get('data', [{}])[0].get('description', '')
-                url = item.get('links', [{}])[0].get('href', '')
-
-                if not url or not title:
-                    continue
-
-                # --- 简单的翻译逻辑 (调用免费接口) ---
-                # 注意：这是在线翻译，如果网络不通可能会失败，但不会导致整个抓取崩溃
-                try:
-                    trans_title = self.translate_text(title)
-                    trans_desc = self.translate_text(description[:200]) # 只翻译前200字摘要
-                except Exception:
-                    trans_title = f"[EN] {title}" # 翻译失败则保留英文
-                    trans_desc = description
-
-                # 构建文章字典
-                article = {
-                    'title': trans_title,
+            feed = self.index_to_soup(self.feeds[0][1])
+            for item in feed.findAll('item'):
+                title = self.tag_to_string(item.find('title'))
+                url = self.tag_to_string(item.find('link'))
+                date = self.tag_to_string(item.find('pubDate'))
+                summary = self.tag_to_string(item.find('description'))
+                
+                # 简单翻译标题和摘要（调用免费翻译接口）
+                translated_title = self.translate_text(title)
+                translated_summary = self.translate_text(summary)
+                
+                articles.append({
+                    'title': translated_title,
                     'url': url,
-                    'description': trans_desc,
-                    'date': item.get('data', [{}])[0].get('date_created', ''),
-                }
-                articles.append(article)
-
+                    'date': date,
+                    'summary': translated_summary,
+                })
         except Exception as e:
-            self.report_progress(0, f'Error fetching feed: {str(e)}')
-
-        return [('NASA Latest News', articles)]
+            self.log.error(f"解析索引失败: {e}")
+        
+        return [('NASA News (CN)', articles)]
 
     def translate_text(self, text):
-        """调用 MyMemory 免费翻译接口"""
-        if not text:
-            return ""
+        """简易翻译函数，调用 MyMemory 免费翻译 API"""
+        if not text or len(text) < 5:
+            return text
         try:
-            encoded_text = urllib.parse.quote(text.encode('utf-8'))
+            import urllib.request, urllib.parse, json
+            encoded_text = urllib.parse.quote(text)
             url = f"https://api.mymemory.translated.net/get?q={encoded_text}&langpair=en|zh-CN"
             req = urllib.request.Request(url)
-            req.add_header('User-Agent', 'Calibre Ebook Generator')
-
-            with urllib.request.urlopen(req, timeout=5) as response:
-                data = json.loads(response.read().decode('utf-8'))
-                return data['responseData']['translatedText']
+            response = urllib.request.urlopen(req, timeout=10)
+            data = json.loads(response.read().decode('utf-8'))
+            return data.get('responseData', {}).get('translatedText', text)
         except:
-            return text # 失败时返回原文
+            return text  # 翻译失败则返回原文
