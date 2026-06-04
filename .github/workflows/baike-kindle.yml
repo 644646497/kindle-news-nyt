@@ -1,5 +1,5 @@
 名字: 维基百科简体抓取推Kindle
-#on:
+on:
   schedule:
     - cron: '0 20 * * *'
   workflow_dispatch
@@ -34,7 +34,7 @@ jobs:
           # base = "https://wikiless.org/wiki/?lang=zh"
 
           # 2. 你要抓的词条
-          words = ["黑洞", "银河系", "火星", "暗物质"]
+          words = ["火星"]
 
           # 3. 繁转简转换器
           cc = OpenCC('t2s')
