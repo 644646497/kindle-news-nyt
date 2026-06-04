@@ -12,22 +12,20 @@ jobs:
       - name: Install Dependencies
         run: |
           sudo apt-get update && sudo apt-get install -y pandoc
-          # 安装繁简转换库，作为双重保险
           pip install opencc-python-reimplemented
       
       - name: Fetch and Convert to Simplified
         run: |
-          # 定义要抓取的词条（格式：中文名|英文文件名）
-          ARTICLES="黑洞|black_hole,宇宙大爆炸|big_bang,暗物质|dark_matter,量子力学|quantum_mechanics"
+          # 【极简版】：以后想加什么词条，直接用中文逗号隔开写在这里就行！
+          ARTICLES="黑洞,宇宙大爆炸,暗物质,量子力学"
           
           mkdir -p wiki_pages
           
           # 1. 遍历抓取，强制使用 zh-cn (简体中文)
-          for entry in $(echo $ARTICLES | tr "," "\n"); do
-            CN_NAME=$(echo $entry | cut -d'|' -f1)
-            FILE_NAME=$(echo $entry | cut -d'|' -f2)
-            echo "正在抓取: $CN_NAME"
-            curl -s "https://zh.wikipedia.org/api/rest_v1/page/html/${CN_NAME}?variant=zh-cn" > "wiki_pages/${FILE_NAME}.html"
+          # 将中文逗号替换为换行符，然后逐个抓取
+          for article in $(echo $ARTICLES | tr "," "\n"); do
+            echo "正在抓取: $article"
+            curl -s "https://zh.wikipedia.org/api/rest_v1/page/html/${article}?variant=zh-cn" > "wiki_pages/${article}.html"
           done
           
           # 2. 使用 opencc 对所有下载的 HTML 进行繁体转简体清洗
