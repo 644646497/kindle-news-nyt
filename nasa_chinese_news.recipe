@@ -1,0 +1,39 @@
+import os, time, re, datetime
+from calibre.web.feeds.news import BasicNewsRecipe
+
+os.environ['TZ'] = 'Asia/Shanghai'
+time.tzset()
+
+class NasaChineseNews(BasicNewsRecipe):
+    title = datetime.datetime.now().strftime('NASA 中文前沿资讯 - %Y-%m-%d')
+    language = 'zh_CN'
+    oldest_article = 2  # 抓取最近2天的新闻
+    max_articles_per_feed = 10  # 每次最多抓取10篇，避免 Kindle 文件过大
+    auto_cleanup = True
+    
+    # 核心保留标签：只保留标题和正文内容区
+    keep_only_tags = [
+        dict(name='h1'),
+        dict(name='div', attrs={'class': re.compile(r'content|article-body|text')}),
+        dict(name='article')
+    ]
+
+    # 基础移除标签：剔除广告、导航、评论区等
+    remove_tags = [
+        dict(name='script'),
+        dict(name='style'),
+        dict(name='aside'),
+        dict(name='footer'),
+        dict(name='nav'),
+        dict(name='header'),
+        dict(name='form'),
+        dict(name='iframe'),
+        dict(name='div', attrs={'class': re.compile(r'ad|sidebar|share|comment|related|recommend')}),
+    ]
+
+    # 使用国内权威媒体的 RSS 源（它们会翻译 NASA 的最新动态）
+    feeds = [
+        ('澎湃新闻-科学', 'https://rsshub.app/thepaper/channel/25950'),  # 澎湃科学频道
+        ('中科院物理所', 'https://rsshub.app/cas/sim/kydt'),          # 中科院物理所动态
+        ('新浪科技-天文', 'https://rsshub.app/sina/rollnews/tech/astro') # 新浪天文新闻
+    ]
