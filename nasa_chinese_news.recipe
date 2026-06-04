@@ -1,57 +1,90 @@
-import os, time, datetime
+import os, time, json, urllib.request, urllib.parse
 from calibre.web.feeds.news import BasicNewsRecipe
+from bs4 import BeautifulSoup
 
-os.environ['TZ'] = 'Asia/Shanghai'
-time.tzset()
-
-class NasaBlogsChinese(BasicNewsRecipe):
-    title = 'NASA News (Translated)'
+class NasaNewsOfficial(BasicNewsRecipe):
+    title = 'NASA Official News (CN)'
     language = 'zh-CN'
     oldest_article = 7
     max_articles_per_feed = 15
-    delay = 2  # 礼貌爬取，间隔2秒
+    delay = 2
+    auto_cleanup = True
+    remove_javascript = True
+    remove_empty_feeds = True
 
-    # ✅ 核心修改：使用 NASA 官方博客聚合源
-    feeds = [
-        ('NASA Official Blogs', 'https://blogs.nasa.gov/feed/'),
-    ]
-
+    # ✅ 核心修改：使用 NASA 官方新闻列表页的 JSON 接口
+    # 这个接口是官网新闻列表页背后调用的真实数据接口，极其稳定
     def parse_index(self):
         articles = []
-        try:
-            feed = self.index_to_soup(self.feeds[0][1])
-            for item in feed.findAll('item'):
-                title = self.tag_to_string(item.find('title'))
-                url = self.tag_to_string(item.find('link'))
-                date = self.tag_to_string(item.find('pubDate'))
-                summary = self.tag_to_string(item.find('description'))
-                
-                # 简单翻译标题和摘要（调用免费翻译接口）
-                translated_title = self.translate_text(title)
-                translated_summary = self.translate_text(summary)
-                
-                articles.append({
-                    'title': translated_title,
-                    'url': url,
-                    'date': date,
-                    'summary': translated_summary,
-                })
-        except Exception as e:
-            self.log.error(f"解析索引失败: {e}")
-        
-        return [('NASA News (CN)', articles)]
+        # 目标 URL：NASA 官网新闻列表页
+        base_url = 'https://www.nasa.gov'
+        # 真实的 JSON 数据接口 (通过浏览器开发者工具抓包分析得出)
+        json_url = 'https://www.nasa.gov/wp-json/nasa/v1/items?per_page=10&offset=0&type[]=news'
 
-    def translate_text(self, text):
-        """简易翻译函数，调用 MyMemory 免费翻译 API"""
-        if not text or len(text) < 5:
+        try:
+            req = urllib.request.Request(json_url)
+            req.add_header('User-Agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36')
+            
+            with urllib.request.urlopen(req, timeout=15) as response:
+                data = json.loads(response.read().decode('utf-8'))
+
+            for item in data:
+                # 提取标题、摘要、URL 和日期
+                title = item.get('title', 'No Title')
+                summary = item.get('excerpt', '')[:300] # 摘要截取前300字
+                url = item.get('link', '')
+                date = item.get('date', '')
+
+                if not url or not title:
+                    continue
+
+                # --- 翻译部分 ---
+                # 为了防止翻译接口不稳定导致抓取失败，这里加了 try-except
+                try:
+                    trans_title = self.translate(title)
+                    trans_summary = self.translate(summary)
+                except:
+                    trans_title = f"[EN] {title}"
+                    trans_summary = summary
+
+                # 构建文章字典
+                article = {
+                    'title': trans_title,
+                    'url': base_url + url, # 拼接完整 URL
+                    'date': date,
+                    'description': f"<p><strong>摘要:</strong> {trans_summary}</p>",
+                    'content': '' # 正文留空，由 Calibre 自动抓取
+                }
+                articles.append(article)
+
+        except Exception as e:
+            self.log.error(f"Failed to fetch JSON: {str(e)}")
+            # 如果 JSON 接口失败，返回一个错误提示文章
+            articles.append({
+                'title': '抓取失败，请检查网络或接口',
+                'url': base_url,
+                'description': f'<p>Error: {str(e)}</p>'
+            })
+
+        return [('NASA Latest News', articles)]
+
+    def translate(self, text):
+        """简易翻译函数"""
+        if not text or len(text) < 3:
             return text
         try:
-            import urllib.request, urllib.parse, json
-            encoded_text = urllib.parse.quote(text)
-            url = f"https://api.mymemory.translated.net/get?q={encoded_text}&langpair=en|zh-CN"
+            # 使用免费的翻译接口
+            url = f"https://api.mymemory.translated.net/get?q={urllib.parse.quote(text)}&langpair=en|zh-CN"
             req = urllib.request.Request(url)
             response = urllib.request.urlopen(req, timeout=10)
             data = json.loads(response.read().decode('utf-8'))
-            return data.get('responseData', {}).get('translatedText', text)
+            return data['responseData']['translatedText']
         except:
-            return text  # 翻译失败则返回原文
+            return text # 翻译失败则返回原文
+
+    def preprocess_html(self, soup):
+        # 强制将语言设置为中文，防止乱码
+        lang_tag = soup.find('html')
+        if lang_tag:
+            lang_tag['lang'] = 'zh-CN'
+        return soup
