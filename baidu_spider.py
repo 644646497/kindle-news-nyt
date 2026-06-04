@@ -1,44 +1,53 @@
-import requests
-from bs4 import BeautifulSoup
-import re
+from selenium import webdriver
+from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+import time
+import sys
 
-# 目标网页 URL（百度百科“宇宙”词条）
-url = 'https://baike.baidu.com/item/宇宙'
+# 设置 Chrome 选项
+chrome_options = Options()
+chrome_options.add_argument("--headless")  # 无头模式，不弹出浏览器窗口
+chrome_series_options.add_argument("--no-sandbox")
+chrome_options.add_argument("--disable-dev-shm-usage")
+chrome_options.add_argument("--disable-blink-features=AutomationControlled")
+chrome_options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
 
-# 【核心】设置请求头，模拟真实浏览器访问，这是绕过百度百科反爬的关键
-headers = {
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-}
+# 初始化浏览器驱动
+driver = webdriver.Chrome(options=chrome_options)
 
 try:
-    # 发送 GET 请求
-    response = requests.get(url, headers=headers)
-    response.raise_for_status()  # 检查 HTTP 是否成功
-    response.encoding = 'utf-8'  # 百度百科通常是 utf-8 编码
-    
-    # 解析 HTML
-    soup = BeautifulSoup(response.text, 'html.parser')
-    
-    # 删除不需要的标签（如脚本、样式表等）
-    for tag in soup(["script", "style", "nav", "footer", "header"]):
-        tag.decompose()
-    
-    # 【核心】精准提取正文区域（百度百科的正文通常在 class="lemma-summary" 或 "body-content" 中）
-    content_div = soup.find('div', class_='lemma-summary') or soup.find('div', class_='body-content')
-    
-    if content_div:
-        # 提取纯文本，并用换行符分隔段落
-        text = content_div.get_text(separator='\n', strip=True)
-        
-        # 使用正则表达式清理多余的空白字符，让排版更干净
-        cleaned_text = re.sub(r'\n\s*\n', '\n\n', text).strip()
-        
-        # 保存到本地文件
-        with open('baidu_article.txt', 'w', encoding='utf-8') as f:
-            f.write(cleaned_text)
-        print("✅ 百度百科【宇宙】词条抓取成功！")
-    else:
-        print("❌ 未能找到正文区域，百度百科可能改版了！")
+    # 访问百度百科“宇宙”词条
+    url = 'https://baike.baidu.com/item/宇宙'
+    print(f"正在访问: {url}")
+    driver.get(url)
+
+    # 【关键步骤】等待页面加载完成，或者等待验证码出现
+    # 如果出现验证码，Selenium 会暂停 20 秒，让你手动完成滑块验证
+    # 如果没有验证码，它会自动继续
+    try:
+        # 等待正文区域出现 (class="lemma-summary")
+        WebDriverWait(driver, 20).until(
+            EC.presence_of_element_located((By.CSS_SELECTOR, ".lemma-summary"))
+        )
+        print("✅ 页面加载成功，或验证码已通过！")
+    except:
+        print("❌ 页面加载超时，可能需要手动处理验证码。")
+        # 如果代码执行到这里，说明出现了验证码，程序会暂停 20 秒
+        # 你可以在这 20 秒内手动完成滑块验证
+        time.sleep(20)
+
+    # 获取页面源代码
+    html = driver.page_source
+
+    # 保存 HTML 到文件
+    with open('baidu_article.html', 'w', encoding='utf-8') as f:
+        f.write(html)
+    print("✅ 页面源代码已保存")
 
 except Exception as e:
-    print(f"❌ 抓取或解析失败: {e}")
+    print(f"❌ 抓取失败: {e}")
+
+finally:
+    driver.quit()
