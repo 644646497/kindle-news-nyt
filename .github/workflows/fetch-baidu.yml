@@ -9,36 +9,30 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       
-      - name: Install pandoc
-        run: sudo apt-get update && sudo apt-get install -y pandoc
+      # 1. 安装 pandoc 和 文本提取神器 lynx
+      - name: Install pandoc and lynx
+        run: sudo apt-get update && sudo apt-get install -y pandoc lynx
       
       - name: Fetch and Clean Baidu Baike Article
         run: |
           echo "正在抓取百度百科【宇宙】词条..."
-          # 1. 抓取网页
+          # 抓取网页
           curl -s -L "https://baike.baidu.com/item/宇宙" \
             -H "User-Agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Safari/605.1.15" \
             -o baidu_raw.html
           
-          # 2. 深度清洗 HTML 
-          echo "正在清洗 HTML 脏代码..."
-          sed -e 's/<script[^>]*>.*<\/script>//g' \
-              -e 's/<style[^>]*>.*<\/style>//g' \
-              -e 's/<nav[^>]*>.*<\/nav>//g' \
-              -e 's/<footer[^>]*>.*<\/footer>//g' \
-              -e 's/<header[^>]*>.*<\/header>//g' \
-              -e 's/<aside[^>]*>.*<\/aside>//g' \
-              baidu_raw.html > baidu_clean.html
+          echo "正在提取纯净文本..."
+          # 【核心修复】使用 lynx 提取纯文本，彻底告别空白页
+          # -dump: 输出纯文本  -nolist: 不显示链接列表  -width=200: 防止文本被强行换行
+          lynx -dump -nolist -width=200 baidu_raw.html > baidu_clean.txt
           
-          # 3. 转换为 EPUB
           echo "正在转换为 EPUB..."
-          pandoc baidu_clean.html -o baidu_article.epub \
+          # 将纯文本转换为 EPUB
+          pandoc baidu_clean.txt -o baidu_article.epub \
             --metadata title="Baidu Baike - Universe" \
             --metadata creator="GitHub Actions" \
-            --toc \
-            --standalone
+            --toc
           
-          # 4. 检查文件
           ls -lh baidu_article.epub
           echo "✅ 百度百科文章已成功转换为 EPUB"
           
