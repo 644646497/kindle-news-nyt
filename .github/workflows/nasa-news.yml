@@ -23,9 +23,10 @@ jobs:
           sudo apt-get install -y calibre
 
       # 3. 第一步：抓取 NASA 新闻，生成临时 EPUB
+      # 注意：这里改成了你实际的文件名 nasa_chinese_news.recipe
       - name: Generate Temp EPUB
         run: |
-          ebook-convert nasa_news.recipe nasa_news_temp.epub
+          ebook-convert nasa_chinese_news.recipe nasa_news_temp.epub
 
       # 4. 第二步：二次清洗，将临时 EPUB 转换为标准 EPUB
       # 这一步会重写 CSS、修复 HTML 标签、生成标准目录，防止被亚马逊静默拦截
