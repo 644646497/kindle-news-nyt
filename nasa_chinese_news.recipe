@@ -9,31 +9,26 @@ class NasaNewsOfficial(BasicNewsRecipe):
     language = 'zh-CN'
     oldest_article = 7
     
-    # --- 核心修改 1：减少文章数量，防止文件过大 ---
-    max_articles_per_feed = 5  
-    
-    # --- 核心修改 2：强力图片压缩，解决 Gmail 552 报错 ---
-    scale_news_images = (600, 600)      # 图片最大 600x600，极大减小体积
-    scale_news_images_to_device = True  # 自动适配 Kindle 屏幕
-    no_imgurize_articles = True         # 禁止文字转图片（防止体积暴增）
-    
-    # --- 抓取设置 ---
-    delay = 2
-    auto_cleanup = True
-    remove_javascript = True
-    remove_empty_feeds = True
-    
-    # --- 核心修改 3：移除干扰元素和隐藏大文件 ---
+    # --- 核心修改：彻底移除所有图片 ---
+    # 这是解决 Gmail 25MB 限制的最有效方法
     remove_tags = [
+        dict(name='img'),  # 移除所有图片标签
         dict(name='script'),
         dict(name='style'),
         dict(name='iframe'),
         dict(name='nav'),
         dict(name='footer'),
         dict(name='header'),
-        dict(name='img', attrs={'src': lambda x: x and ('logo' in x or 'icon' in x or 'banner' in x)}), # 移除无关小图或大横幅
-        dict(name='div', attrs={'class': lambda x: x and ('share' in x or 'related' in x or 'newsletter' in x or 'sidebar' in x)}),
+        dict(name='div', attrs={'class': lambda x: x and ('share' in x or 'related' in x or 'newsletter' in x)}),
     ]
+
+    # --- 其他优化 ---
+    max_articles_per_feed = 5  # 保持较少的文章数量
+    delay = 2
+    auto_cleanup = True
+    remove_javascript = True
+    remove_empty_feeds = True
+    no_imgurize_articles = True  # 确保文字不会被转成图片
 
     def parse_index(self):
         articles = []
@@ -56,7 +51,7 @@ class NasaNewsOfficial(BasicNewsRecipe):
                 if not url or not title:
                     continue
 
-                # 翻译（带容错，防止翻译接口挂掉导致整个抓取失败）
+                # 翻译（带容错）
                 try:
                     trans_title = self.translate(title)
                     trans_summary = self.translate(summary)
