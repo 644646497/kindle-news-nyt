@@ -14,20 +14,22 @@ class TechNewsRecipe(BasicNewsRecipe):
     language = 'zh_CN'
     oldest_article = 1
     max_articles_per_feed = 15
-    auto_cleanup = True
+    
+    # 【修改1】移除 auto_cleanup = True，防止自动清理机制与手动规则冲突
     remove_empty_feeds = True
 
-    # 核心清理逻辑：只保留标题和正文区域
+    # 【修改2】核心清理逻辑：放宽匹配条件，覆盖更多可能的正文 class 或 id
     keep_only_tags = [
-        dict(name='h1', attrs={'class': re.compile(r'post-title|entry-title')}),
-        dict(name='div', attrs={'class': re.compile(r'post-content|entry-content|article-body')})
+        dict(name='h1', attrs={'class': re.compile(r'post-title|entry-title', re.I)}),
+        dict(name='div', attrs={'class': re.compile(r'post-content|entry-content|article-body|single-post-content|article-content', re.I)}),
+        dict(name='div', attrs={'id': re.compile(r'post-content|entry-content|article-body', re.I)})
     ]
 
-    # 移除不需要的元素（广告、导航、评论区）
+    # 【修改3】移除不需要的元素（优化正则，防止误杀正文容器）
     remove_tags = [
         dict(name=['script', 'style', 'iframe', 'form']),
-        dict(name='div', attrs={'id': re.compile(r'comment|related|sidebar|ad|share')}),
-        dict(name='div', attrs={'class': re.compile(r'comment|related|sidebar|ad|share|author-bio|post-nav')}),
+        dict(name='div', attrs={'id': re.compile(r'^(comment|related|sidebar|ad|share)', re.I)}),
+        dict(name='div', attrs={'class': re.compile(r'^(comment|related|sidebar|author-bio|post-nav)', re.I)}),
         dict(name='nav'),
         dict(name='footer'),
         dict(name='aside'),
@@ -37,6 +39,10 @@ class TechNewsRecipe(BasicNewsRecipe):
     ]
 
     def preprocess_html(self, soup):
+        # 【修改4】增加调试日志，方便在 GitHub Actions 中查看匹配情况
+        content_divs = soup.find_all('div', attrs={'class': re.compile(r'post-content|entry-content|article-body|single-post-content|article-content', re.I)})
+        print(f"=== [Debug] 找到 {len(content_divs)} 个疑似正文的 div 标签 ===")
+
         # 1. 移除特定的“咖啡赞助”图片和文字
         for img in soup.find_all('img'):
             src = img.get('src', '')
