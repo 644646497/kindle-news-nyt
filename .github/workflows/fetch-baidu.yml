@@ -5,34 +5,39 @@ on:
 
 jobs:
   fetch-and-send:
-    runs-on: ubuntu-latest
+    runs runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       
       - name: Install pandoc
         run: sudo apt-get update && sudo apt-get install -y pandoc
       
-      - name: Fetch Baidu Baike Article
+      - name: Fetch and Clean Baidu Baike Article
         run: |
-          # 1. 使用 curl 抓取“宇宙”词条
-          # 【核心】必须加上 -H 参数伪装成真实浏览器，否则会被百度百科拦截返回 403
           echo "正在抓取百度百科【宇宙】词条..."
+          # 1. 抓取网页
           curl -s -L "https://baike.baidu.com/item/宇宙" \
             -H "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" \
             -o baidu_raw.html
           
-          # 2. 简单清理 HTML 标签（去除 script, style 等，保留基本文本结构）
-          # 使用 sed 命令进行基础的文本清洗
+          # 2. 【核心优化】深度清洗 HTML，剔除所有干扰排版和导致转换失败的标签
+          echo "正在清洗 HTML 脏代码..."
           sed -e 's/<script[^>]*>.*<\/script>//g' \
               -e 's/<style[^>]*>.*<\/style>//g' \
-              -e 's/<[^>]*>//g' \
-              baidu_raw.html > baidu_clean.txt
+              -e 's/<nav[^>]*>.*<\/nav>//g' \
+              -e 's/<footer[^>]*>.*<\/footer>//g' \
+              -e 's/<header[^>]*>.*<\/header>//g' \
+              -e 's/<aside[^>]*>.*<\/aside>//g' \
+              baidu_raw.html > baidu_clean.html
           
-          # 3. 使用 Pandoc 将清洗后的文本转换为 EPUB
-          pandoc baidu_clean.txt -o baidu_article.epub \
-            --metadata title="百度百科-宇宙" \
+          # 3. 转换为 EPUB
+          echo "正在转换为 EPUB..."
+          pandoc baidu_clean.html -o baidu_article.epub \
+            --metadata title="Baidu Baike - Universe" \
             --toc
           
+          # 4. 打印文件大小，确保没有超限（Kindle 限制 50MB）
+          ls -lh baidu_article.epub
           echo "✅ 百度百科文章已成功转换为 EPUB"
           
       - name: Send to Kindle
@@ -48,22 +53,23 @@ jobs:
           from email.mime.multipart import MIMEMultipart
           from email.mime.base import MIMEBase
           from email import encoders
-          from datetime import datetime
           
           msg = MIMEMultipart()
           msg["From"] = os.environ["FROM"]
           msg["To"] = os.environ["TO"]
-          msg["Subject"] = "百度百科-宇宙 " + datetime.now().strftime("%Y-%m-%d")
+          # 【核心优化】：必须使用纯英文主题，防止亚马逊静默拦截
+          msg["Subject"] = "Baidu Baike Article" 
           
           with open("baidu_article.epub", "rb") as f:
               part = MIMEBase("application", "epub+zip")
               part.set_payload(f.read())
               encoders.encode_base64(part)
-              part.add_header("Content-Disposition", "attachment", filename="baidu_article.epub")
+              # 附件名也改为纯英文
+              part.add_header("Content-Disposition", "attachment", filename="baidu_article.epub") 
               msg.attach(part)
           
           with smtplib.SMTP_SSL(os.environ["SMTP"], int(os.environ["PORT"])) as server:
               server.login(os.environ["FROM"], os.environ["SECRET"])
               server.send_message(msg)
-          print("✅ 百度百科文章已成功发送到 Kindle！")
+          print("✅ 邮件已成功发送至 Kindle！")
           '
