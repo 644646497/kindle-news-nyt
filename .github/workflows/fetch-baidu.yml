@@ -5,7 +5,7 @@ on:
 
 jobs:
   fetch-and-send:
-    runs runs-on: ubuntu-latest
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       
@@ -17,10 +17,10 @@ jobs:
           echo "正在抓取百度百科【宇宙】词条..."
           # 1. 抓取网页
           curl -s -L "https://baike.baidu.com/item/宇宙" \
-            -H "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" \
+            -H "User-Agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Safari/605.1.15" \
             -o baidu_raw.html
           
-          # 2. 【核心优化】深度清洗 HTML，剔除所有干扰排版和导致转换失败的标签
+          # 2. 深度清洗 HTML 
           echo "正在清洗 HTML 脏代码..."
           sed -e 's/<script[^>]*>.*<\/script>//g' \
               -e 's/<style[^>]*>.*<\/style>//g' \
@@ -34,9 +34,11 @@ jobs:
           echo "正在转换为 EPUB..."
           pandoc baidu_clean.html -o baidu_article.epub \
             --metadata title="Baidu Baike - Universe" \
-            --toc
+            --metadata creator="GitHub Actions" \
+            --toc \
+            --standalone
           
-          # 4. 打印文件大小，确保没有超限（Kindle 限制 50MB）
+          # 4. 检查文件
           ls -lh baidu_article.epub
           echo "✅ 百度百科文章已成功转换为 EPUB"
           
@@ -48,28 +50,29 @@ jobs:
           PORT: ${{ secrets.PORT }}
           SECRET: ${{ secrets.SECRET }}
         run: |
-          python3 -c '
+          python3 -c "
           import smtplib, os
           from email.mime.multipart import MIMEMultipart
           from email.mime.base import MIMEBase
           from email import encoders
           
           msg = MIMEMultipart()
-          msg["From"] = os.environ["FROM"]
-          msg["To"] = os.environ["TO"]
-          # 【核心优化】：必须使用纯英文主题，防止亚马逊静默拦截
-          msg["Subject"] = "Baidu Baike Article" 
+          msg['From'] = os.environ['FROM']
+          msg['To'] = os.environ['TO']
+          msg['Subject'] = 'Baidu Baike Article'
           
-          with open("baidu_article.epub", "rb") as f:
-              part = MIMEBase("application", "epub+zip")
+          part = MIMEBase('application', 'epub+zip')
+          
+          with open('baidu_article.epub', 'rb') as f:
               part.set_payload(f.read())
-              encoders.encode_base64(part)
-              # 附件名也改为纯英文
-              part.add_header("Content-Disposition", "attachment", filename="baidu_article.epub") 
-              msg.attach(part)
           
-          with smtplib.SMTP_SSL(os.environ["SMTP"], int(os.environ["PORT"])) as server:
-              server.login(os.environ["FROM"], os.environ["SECRET"])
-              server.send_message(msg)
-          print("✅ 邮件已成功发送至 Kindle！")
-          '
+          encoders.encode_base64(part)
+          part.add_header('Content-Disposition', 'attachment', filename='universe.epub')
+          msg.attach(part)
+          
+          with smtplib.SMTP_SSL(os.environ['SMTP'], int(os.environ['PORT'])) as server:
+              server.login(os.environ['FROM'], os.environ['SECRET'])
+              server.sendmail(os.environ['FROM'], os.environ['TO'], msg.as_string())
+          
+          print('✅ 邮件已成功发送至 Kindle！')
+          "
