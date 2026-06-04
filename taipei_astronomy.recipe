@@ -8,80 +8,58 @@ try:
     HAS_OPENCC = True
 except ImportError:
     HAS_OPENCC = False
-    print("Warning: opencc not found. Skipping conversion.")
 
-class AdvancedUserRecipeTechNews(BasicNewsRecipe):
+class TechNewsRecipe(BasicNewsRecipe):
     title = '科技新报 (TechNews)'
     language = 'zh_CN'
     oldest_article = 1
     max_articles_per_feed = 15
-    auto_cleanup = True  # 开启智能清理，自动识别正文
+    auto_cleanup = True
     remove_empty_feeds = True
 
-    # 【关键修改】移除 keep_only_tags，防止因类名错误导致正文丢失
-    # 改用 remove_tags 来精准打击“尾巴”和“广告”
+    # 核心清理逻辑：只保留标题和正文区域
+    keep_only_tags = [
+        dict(name='h1', attrs={'class': re.compile(r'post-title|entry-title')}),
+        dict(name='div', attrs={'class': re.compile(r'post-content|entry-content|article-body')})
+    ]
 
+    # 移除不需要的元素（广告、导航、评论区）
     remove_tags = [
-        # 1. 移除底部的导航菜单、分享按钮、评论区入口
+        dict(name=['script', 'style', 'iframe', 'form']),
+        dict(name='div', attrs={'id': re.compile(r'comment|related|sidebar|ad|share')}),
+        dict(name='div', attrs={'class': re.compile(r'comment|related|sidebar|ad|share|author-bio|post-nav')}),
         dict(name='nav'),
         dict(name='footer'),
         dict(name='aside'),
-        dict(name='div', attrs={'id': re.compile(r'comment|share|related|sidebar|menu')}),
-        dict(name='div', attrs={'class': re.compile(r'comment|share|related|sidebar|menu|ad|ads')}),
-
-        # 2. 移除脚本和样式表
-        dict(name='script'),
-        dict(name='style'),
-        dict(name='iframe'),
-
-        # 3. 移除文章内的超链接（可选，为了防止点击跳转，如果想去掉链接保留文字，用下面这行）
-        # dict(name='a'),
+        dict(name='hr'),
+        # 移除所有的超链接，防止点击跳转或出现蓝色文字
+        dict(name='a')
     ]
 
-    # 预处理 HTML：在 Calibre 抓取后，进一步清洗
     def preprocess_html(self, soup):
-        # 1. 强力移除特定的“尾巴”文字块（基于你提供的截图）
-        # 查找包含 "downloaded by calibre" 或 "Section menu" 的段落并删除
-        for tag in soup.find_all(text=re.compile(r'downloaded by calibre|Section menu|Main menu')):
-            parent = tag.parent
-            if parent:
-                parent.decompose()
+        # 1. 移除特定的“咖啡赞助”图片和文字
+        for img in soup.find_all('img'):
+            src = img.get('src', '')
+            if 'coffee' in src.lower() or 'sponsor' in src.lower():
+                img.decompose()
 
-        # 2. 移除“延伸阅读”、“留给我们话”等区块
-        # 这里通过查找包含这些关键词的 h2, h3 或 div 来删除整个区块
-        keywords_to_remove = ['延伸閱讀', '留給我們的話', '訂閱免費電子報', '加入好友']
-        for keyword in keywords_to_remove:
-            # 查找包含关键词的标签（通常是标题），然后删除它及其后面的兄弟节点（直到下一个标题）
-            targets = soup.find_all(string=re.compile(keyword))
-            for target in targets:
-                # 向上找到包裹它的容器（通常是 div 或 section）
-                container = target.find_parent(['div', 'section', 'article'])
-                if container:
-                    container.decompose()
-                else:
-                    # 如果找不到容器，就只删除这个文本所在的标签
-                    target.parent.decompose()
-
-        # 3. 移除所有的图片链接（防止点击图片跳转）
-        # 如果你想保留图片但不想让它能点击，可以解开下面的注释
-        # for img in soup.find_all('img'):
-        #     if img.parent.name == 'a':
-        #         img.parent.replace_with(img)
+        # 2. 移除包含特定关键词的段落（针对文末尾巴）
+        keywords_to_remove = ['延伸閱讀', '留給我們的話', 'downloaded by calibre', 'Section menu']
+        for tag in soup.find_all(['p', 'div', 'span']):
+            text = tag.get_text(strip=True)
+            if any(kw in text for kw in keywords_to_remove):
+                tag.decompose()
 
         return soup
 
-    # 繁简转换处理
     def postprocess_html(self, soup, first_fetch):
+        # 3. 执行繁简转换
         if HAS_OPENCC:
-            # 遍历所有文本节点进行转换
             for element in soup.find_all(string=True):
-                if re.search(r'[\u4e00-\u9fff]', element):
-                    element.replace_with(cc.convert(element))
+                if element.strip():
+                    # 检查是否包含繁体字特征，避免重复转换或转换英文
+                    if re.search(r'[\u4e00-\u9fff]', element):
+                        element.replace_with(cc.convert(element))
         return soup
 
-    feeds = [('科技新报全站','https://technews.tw/feed')]
-                    # OpenCC 会自动处理，如果不是繁体它会保持原样
-                    new_text = cc.convert(element)
-                    if new_text != element:
-                        element.replace_with(new_text)
-        return soup
+    feeds = [('科技新报全站', 'https://technews.tw/feed')]
