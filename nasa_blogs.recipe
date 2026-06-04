@@ -1,120 +1,59 @@
 import re, datetime
 from calibre.web.feeds.news import BasicNewsRecipe
-from calibre.ebooks.BeautifulSoup import BeautifulSoup
 
-# 英译中 + 繁简统一为简体
 try:
     from deep_translator import GoogleTranslator
     translator = GoogleTranslator(source='en', target='zh-CN')
     CAN_TRANSLATE = True
 except ImportError:
-    print("警告: 未安装 deep-translator，将保留英文原文。安装命令: pip install deep-translator")
     CAN_TRANSLATE = False
 
-class NasaBlogsFullChineseRecipe(BasicNewsRecipe):
-    title = f'NASA 博客精选 - {datetime.datetime.now().strftime("%Y-%m-%d")}'
+class NasaRSSChineseRecipe(BasicNewsRecipe):
+    title = f'NASA 新闻精选 - {datetime.datetime.now().strftime("%Y-%m-%d")}'
     language = 'zh-CN'
     oldest_article = 7
     max_articles_per_feed = 10
     auto_cleanup = True
+    no_stylesheets = True
 
-    # 保留：标题 + 正文区域（NASA 博客结构）
     keep_only_tags = [
-        dict(name='h1'),  # 文章标题
-        dict(name='div', attrs={'class': re.compile(r'entry-content|post-content|field-content|node__content')}),
-        dict(name='article'),
+        dict(name='h1'),
+        dict(name='div', attrs={'class': re.compile(r'entry-content|field-content|text-content')}),
     ]
 
-    # 移除所有干扰元素
     remove_tags = [
-        dict(name='aside'), dict(name='nav'), dict(name='footer'), dict(name='header'),
-        dict(name='div', attrs={'class': re.compile(r'sidebar|share|meta|comments|related|tags|author-bio')}),
-        dict(name='script'), dict(name='style'), dict(name='iframe'),
+        dict(name='aside'), dict(name='nav'), dict(name='footer'),
+        dict(name='script'), dict(name='style'),
+        dict(name='div', attrs={'class': re.compile(r'share|meta|related|tags|sidebar|comments')}),
     ]
 
-    def parse_index(self):
-        """
-        从博客列表页提取所有文章链接，并返回 Calibre 要求的正确格式
-        """
-        # 存储文章的列表，每个元素是一个字典
-        articles = []
-        index_url = 'https://www.nasa.gov/blogs/'
-        
-        # 使用 index_to_soup 加载列表页
-        soup = self.index_to_soup(index_url)
-
-        # 查找所有文章块，NASA 博客通常每个 <article> 标签是一篇文章
-        for post in soup.find_all('article'):
-            title_tag = post.find('h2', class_='node__title')
-            if not title_tag:
-                continue
-            
-            link_tag = title_tag.find('a')
-            if not link_tag:
-                continue
-
-            article_url = link_tag.get('href')
-            if article_url.startswith('/'):
-                article_url = 'https://www.nasa.gov' + article_url
-
-            title = self.tag_to_string(link_tag)
-            
-            # 尝试获取发布日期
-            date_tag = post.find('time')
-            date_str = date_tag.get('datetime', '') if date_tag else ''
-
-            # 关键修复：将文章信息存储为字典，而不是元组
-            article_dict = {
-                'title': title,
-                'url': article_url,
-                'date': date_str,
-                'description': '',  # 摘要可选，暂时留空
-                # 'author': 'NASA'  # 作者可选
-            }
-            articles.append(article_dict)
-            
-            # 达到最大文章数后停止
-            if len(articles) >= self.max_articles_per_feed:
-                break
-
-        # 关键修复：返回格式为 [('feed_title', [dict1, dict2, ...])]
-        # 如果没有找到任何文章，返回一个空列表以避免错误
-        if not articles:
-            self.log.warning('没有在页面中找到任何文章链接，请检查网页结构是否变化。')
-            return []
-            
-        return [('NASA 博客', articles)]
-
-    def preprocess_html(self, soup):
-        """预处理：移除导航栏等噪音"""
-        for tag in soup.find_all(['header', 'footer', 'nav'], class_=re.compile(r'header|footer|global')):
-            tag.decompose()
-        return soup
+    # 🚀 直接使用 NASA 官方 RSS Feed
+    feeds = [
+        ('NASA 新闻', 'https://www.nasa.gov/news-release/feed/'),
+        ('NASA 博客', 'https://www.nasa.gov/blogs/feed/'),
+    ]
 
     def postprocess_html(self, soup, first_fetch):
-        """后处理：翻译为简体中文"""
+        """翻译为简体中文"""
         if not CAN_TRANSLATE:
             return soup
 
-        content_containers = soup.find_all(['div', 'article'], 
-                                            class_=re.compile(r'entry-content|post-content|field-content|node__content'))
-        
-        if not content_containers:
-            content_containers = [soup.body] if soup.body else [soup]
+        # 找到正文容器
+        containers = soup.find_all(['div', 'article'], 
+                                   class_=re.compile(r'entry-content|field-content|text-content|node__content'))
+        if not containers:
+            containers = [soup.body] if soup.body else [soup]
 
-        for container in content_containers:
-            paragraphs = container.find_all(['p', 'h2', 'h3', 'h4', 'li', 'figcaption'])
+        for container in containers:
+            paragraphs = container.find_all(['p', 'h2', 'h3', 'li'])
             for p in paragraphs:
-                original = p.get_text(strip=True)
-                # 跳过过短或无英文的文本
-                if len(original) < 20 or not re.search(r'[a-zA-Z]{3,}', original):
+                text = p.get_text(strip=True)
+                if len(text) < 20 or not re.search(r'[a-zA-Z]{3,}', text):
                     continue
                 try:
-                    translated = translator.translate(original)
-                    if translated and translated != original:
+                    translated = translator.translate(text)
+                    if translated and translated != text:
                         p.string = translated
-                except Exception as e:
-                    self.log.error(f'翻译失败: {str(e)[:50]}')
+                except Exception:
                     continue
-
         return soup
