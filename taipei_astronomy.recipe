@@ -1,7 +1,7 @@
 import os, time, re, datetime
 from calibre.web.feeds.news import BasicNewsRecipe
 
-# 尝试导入繁简转换库，如果没装则跳过转换功能
+# 引入繁简转换库
 try:
     from opencc import OpenCC
     cc = OpenCC('t2s') # t2s: Traditional to Simplified
@@ -10,100 +10,76 @@ except ImportError:
     HAS_OPENCC = False
     print("Warning: opencc not found. Skipping conversion.")
 
-class TechNewsRecipe(BasicNewsRecipe):
+class AdvancedUserRecipeTechNews(BasicNewsRecipe):
     title = '科技新报 (TechNews)'
     language = 'zh_CN'
     oldest_article = 1
     max_articles_per_feed = 15
-    auto_cleanup = True
+    auto_cleanup = True  # 开启智能清理，自动识别正文
     remove_empty_feeds = True
 
-    # 1. 核心抓取范围：只保留标题和正文容器
-    keep_only_tags = [
-        dict(name='h1', attrs={'class': 'entry-title'}),
-        dict(name='div', attrs={'class': 'entry-content'})
-    ]
+    # 【关键修改】移除 keep_only_tags，防止因类名错误导致正文丢失
+    # 改用 remove_tags 来精准打击“尾巴”和“广告”
 
-    # 2. 强力移除规则：针对尾部空白页和无关元素
     remove_tags = [
+        # 1. 移除底部的导航菜单、分享按钮、评论区入口
+        dict(name='nav'),
+        dict(name='footer'),
+        dict(name='aside'),
+        dict(name='div', attrs={'id': re.compile(r'comment|share|related|sidebar|menu')}),
+        dict(name='div', attrs={'class': re.compile(r'comment|share|related|sidebar|menu|ad|ads')}),
+
+        # 2. 移除脚本和样式表
         dict(name='script'),
         dict(name='style'),
         dict(name='iframe'),
-        dict(name='form'),       # 移除留言表单
-        dict(name='nav'),       # 移除底部导航菜单 (Section menu)
-        dict(name='footer'),
-        dict(name='aside'),
-        dict(name='hr'),        # 移除分割线
-        # 移除包含特定文字的 div 或 p (如 "延伸阅读", "留给我们的话")
-        dict(name=['div', 'p', 'section'], attrs={'class': re.compile(r'related|share|comment|ad|sidebar|tag')}),
+
+        # 3. 移除文章内的超链接（可选，为了防止点击跳转，如果想去掉链接保留文字，用下面这行）
+        # dict(name='a'),
     ]
 
-    feeds = [('科技新报全站', 'https://technews.tw/feed')]
-
+    # 预处理 HTML：在 Calibre 抓取后，进一步清洗
     def preprocess_html(self, soup):
-        """
-        在生成电子书前对 HTML 进行深度清洗
-        """
-        # --- A. 彻底移除所有链接 (解决点击跳转问题) ---
-        # 将 <a> 标签替换为其内部文本，或者直接删除
-        for a in soup.find_all('a'):
-            # 如果你想保留文字但去掉链接，用下面这行：
-            a.replace_with(a.get_text())
-            # 如果你想彻底删掉这个区域（比如底部的 "Section menu"），可以用 a.decompose()
-
-        # --- B. 针对性移除尾部垃圾内容 ---
-        # 移除 "延伸阅读" 及其列表
-        related_headers = soup.find_all(string=re.compile(r'延伸閱讀'))
-        for h in related_headers:
-            # 向上找到父级容器并删除
-            parent = h.find_parent(['div', 'section', 'ul'])
-            if parent:
-                parent.decompose()
-            else:
-                h.find_parent().decompose()
-
-        # 移除 "留给我们的话" / 留言区
-        comment_headers = soup.find_all(string=re.compile(r'留給我們的話|歡迎留言'))
-        for h in comment_headers:
-            parent = h.find_parent(['div', 'section', 'form'])
+        # 1. 强力移除特定的“尾巴”文字块（基于你提供的截图）
+        # 查找包含 "downloaded by calibre" 或 "Section menu" 的段落并删除
+        for tag in soup.find_all(text=re.compile(r'downloaded by calibre|Section menu|Main menu')):
+            parent = tag.parent
             if parent:
                 parent.decompose()
 
-        # 移除 "This article was downloaded by calibre..." 这种自动生成的废话
-        downloaded_notes = soup.find_all(string=re.compile(r'downloaded by calibre'))
-        for note in downloaded_notes:
-            note.find_parent().decompose()
+        # 2. 移除“延伸阅读”、“留给我们话”等区块
+        # 这里通过查找包含这些关键词的 h2, h3 或 div 来删除整个区块
+        keywords_to_remove = ['延伸閱讀', '留給我們的話', '訂閱免費電子報', '加入好友']
+        for keyword in keywords_to_remove:
+            # 查找包含关键词的标签（通常是标题），然后删除它及其后面的兄弟节点（直到下一个标题）
+            targets = soup.find_all(string=re.compile(keyword))
+            for target in targets:
+                # 向上找到包裹它的容器（通常是 div 或 section）
+                container = target.find_parent(['div', 'section', 'article'])
+                if container:
+                    container.decompose()
+                else:
+                    # 如果找不到容器，就只删除这个文本所在的标签
+                    target.parent.decompose()
 
-        # --- C. 清理文末的空白段落 (解决空白页问题) ---
-        # 获取正文容器
-        content_div = soup.find('div', attrs={'class': 'entry-content'})
-        if content_div:
-            # 从后往前遍历，删除空的 p 标签或 br 标签
-            children = list(content_div.children)
-            children.reverse()
-            empty_count = 0
-            for child in children:
-                if hasattr(child, 'name'):
-                    text = child.get_text(strip=True)
-                    # 如果是空段落，或者只有换行符
-                    if not text or child.name in ['br', 'hr']:
-                        child.decompose()
-                        empty_count += 1
-                    else:
-                        # 遇到有内容的段落就停止删除
-                        break
+        # 3. 移除所有的图片链接（防止点击图片跳转）
+        # 如果你想保留图片但不想让它能点击，可以解开下面的注释
+        # for img in soup.find_all('img'):
+        #     if img.parent.name == 'a':
+        #         img.parent.replace_with(img)
 
         return soup
 
+    # 繁简转换处理
     def postprocess_html(self, soup, first_fetch):
-        """
-        文章下载完成后，执行繁简转换
-        """
         if HAS_OPENCC:
             # 遍历所有文本节点进行转换
             for element in soup.find_all(string=True):
-                if element.strip():
-                    # 简单的判断：如果包含繁体常用字特征（这里简化处理，直接全转）
+                if re.search(r'[\u4e00-\u9fff]', element):
+                    element.replace_with(cc.convert(element))
+        return soup
+
+    feeds = [('科技新报全站','https://technews.tw/feed')]
                     # OpenCC 会自动处理，如果不是繁体它会保持原样
                     new_text = cc.convert(element)
                     if new_text != element:
