@@ -26,12 +26,17 @@ class NasaBlogsFullChineseRecipe(BasicNewsRecipe):
         dict(name='div', attrs={'class': 'text-content'}),
     ]
 
-    # 移除所有干扰元素
+    # 移除所有干扰元素（修复括号问题）
     remove_tags = [
-        dict(name='aside'), dict(name='nav'), dict(name='footer'), dict(name='header'),
-        dict(name='div', attrs={'class': re.compile(r'sidebar|share|meta|comments|related|tags|author-bio'})),
-        dict(name='div', attrs={'class': re.compile(r'field--name-field-tags|node__meta'})),
-        dict(name='script'), dict(name='style'), dict(name='iframe'),
+        dict(name='aside'), 
+        dict(name='nav'), 
+        dict(name='footer'), 
+        dict(name='header'),
+        dict(name='div', attrs={'class': re.compile(r'sidebar|share|meta|comments|related|tags|author-bio')}),
+        dict(name='div', attrs={'class': re.compile(r'field--name-field-tags|node__meta')}),
+        dict(name='script'), 
+        dict(name='style'), 
+        dict(name='iframe'),
     ]
 
     def parse_index(self):
