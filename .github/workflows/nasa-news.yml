@@ -1,0 +1,60 @@
+name: Send NASA News to Kindle
+
+on:
+  schedule:
+    - cron: '0 13 * * *'   # 每天北京时间 21:00 自动运行
+  workflow_dispatch:       # 允许在网页上手动点击按钮运行
+
+jobs:
+  send:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Calibre
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y calibre
+
+      - name: Generate and Send NASA News
+        env:
+          FROM: ${{ secrets.FROM }}
+          TO: ${{ secrets.TO }}
+          SMTP: ${{ secrets.SMTP }}
+          PORT: ${{ secrets.PORT }}
+          SECRET: ${{ secrets.SECRET }}
+        run: |
+          # 1. 使用 Calibre 将 Recipe 转换为 EPUB
+          echo "正在抓取 NASA 中文资讯并生成 EPUB..."
+          ebook-convert nasa_chinese_news.recipe nasa_news.epub --output-profile kindle
+          
+          # 2. 发送邮件
+          python3 -c '
+          import smtplib, os
+          from email.mime.multipart import MIMEMultipart
+          from email.mime.base import MIMEBase
+          from email import encoders
+          from datetime import datetime
+
+          msg = MIMEMultipart()
+          msg["From"] = os.environ["FROM"]
+          msg["To"] = os.environ["TO"]
+          
+          # 【核心安全设置】：邮件主题必须用纯英文，防止亚马逊静默拦截！
+          msg["Subject"] = f"NASA News {datetime.now().strftime("%Y-%m-%d")}"
+          
+          # 读取生成的 epub 文件
+          with open("nasa_news.epub", "rb") as f:
+              part = MIMEBase("application", "epub+zip")
+              part.set_payload(f.read())
+              encoders.encode_base64(part)
+              
+              # 【核心安全设置】：附件文件名也必须用纯英文！
+              part.add_header("Content-Disposition", "attachment", filename="nasa_news.epub")
+              msg.attach(part)
+
+          with smtplib.SMTP_SSL(os.environ["SMTP"], int(os.environ["PORT"])) as server:
+              server.login(os.environ["FROM"], os.environ["SECRET"])
+              server.send_message(msg)
+          print("✅ NASA 资讯已成功发送至 Kindle！")
+          '
