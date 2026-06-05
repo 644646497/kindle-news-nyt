@@ -19,48 +19,45 @@ except ImportError:
 
 # --- 1. 环境初始化：自动安装中文字体 (解决方块问题) ---
 def ensure_chinese_font():
-    # 常见的 Noto Sans CJK 字体路径
     font_paths = [
         "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
         "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc"
     ]
-
     for path in font_paths:
         if os.path.exists(path):
             return path
-
-    # 如果没找到，尝试安装
     print(">>> 未检测到中文字体，正在尝试安装...")
     try:
         subprocess.run(["sudo", "apt-get", "update"], check=True, capture_output=True)
         subprocess.run(["sudo", "apt-get", "install", "-y", "fonts-noto-cjk"], check=True, capture_output=True)
-        # 刷新字体缓存
         subprocess.run(["fc-cache", "-f"], check=True, capture_output=True)
-
-        # 再次检查
         for path in font_paths:
             if os.path.exists(path):
                 return path
     except Exception as e:
         print(f">>> 安装字体失败: {e}")
-
     return None
 
 
 class TechNewsRecipe(BasicNewsRecipe):
     title = '科技新报 - ' + datetime.datetime.now().strftime('%Y-%m-%d %H:%M')
     language = 'zh-CN'
-    oldest_article = 1
+    oldest_article = 2
     max_articles_per_feed = 20
     auto_cleanup = True
     no_stylesheets = False
-    remove_javascript = True
+    remove_javascript = False  # 【关键修改1】允许执行JS，防止首页是动态渲染的
     compress_news_images = True
     scale_news_images_to = 600
 
+    # 【关键修改2】增加备用 RSS 源，如果首页抓取失败，Calibre 会尝试使用 RSS
+    feeds = [
+        ('科技新报 RSS', 'https://technews.tw/feed/'),
+    ]
+
     keep_only_tags = [
         dict(name='h1'),
-        dict(name='div', attrs={'class': re.compile(r'article-content|entry-content|post-body')}),
+        dict(name='div', attrs={'class': re.compile(r'article-content|entry-content|post-body|single-post-content', re.I)}),
         dict(name='article'),
     ]
 
@@ -68,12 +65,11 @@ class TechNewsRecipe(BasicNewsRecipe):
         dict(name='script'), dict(name='style'), dict(name='iframe'),
         dict(name='nav'), dict(name='header'), dict(name='footer'),
         dict(name='aside'),
-        dict(name='div', attrs={'class': re.compile(r'ad|share|related|comment|sidebar|tags|meta', re.I)}),
+        dict(name='div', attrs={'class': re.compile(r'ad|share|related|comment|sidebar|tags|meta|social|paywall', re.I)}),
     ]
 
     def parse_index(self):
         feeds = []
-        # 科技新报的首页链接
         sections = [('科技新报 - 首页', 'https://technews.tw/')]
 
         for section_name, section_url in sections:
@@ -82,19 +78,33 @@ class TechNewsRecipe(BasicNewsRecipe):
                 articles = []
                 seen_urls = set()
 
-                # 科技新报的文章链接通常是 /年/月/日/文章名/ 的格式
-                for link in soup.find_all('a', href=re.compile(r'^/\d{4}/\d{2}/\d{2}/')):
+                # 【关键修改3】放宽链接匹配规则，同时匹配多种可能的链接格式
+                link_pattern = re.compile(r'^/\d{4}/\d{2}/\d{2}/|/news/|/technews/')
+
+                for link in soup.find_all('a', href=link_pattern):
                     title = link.get_text(strip=True)
+                    # 过滤掉太短的标题（通常是导航按钮）
                     if title and len(title) > 5:
                         url = link.get('href')
                         if url.startswith('/'):
                             url = 'https://technews.tw' + url
-                        if url in seen_urls:
+                        
+                        # 去除URL末尾的斜杠以便去重
+                        clean_url = url.rstrip('/')
+                        if clean_url in seen_urls:
                             continue
-                        seen_urls.add(url)
+                        seen_urls.add(clean_url)
                         articles.append({'title': title, 'url': url, 'date': '', 'description': ''})
+                    
                     if len(articles) >= self.max_articles_per_feed:
                         break
+
+                # 【关键修改4】加入调试日志，如果没抓到文章，打印当前页面的HTML片段以便排查
+                if not articles:
+                    self.log.error(f"!!! 警告: 在 {section_name} 未找到任何文章链接。")
+                    self.log.error(f"当前页面部分HTML内容: {str(soup)[:1000]}")
+                else:
+                    self.log.info(f"成功在 {section_name} 找到 {len(articles)} 篇文章。")
 
                 if articles:
                     feeds.append((section_name, articles))
@@ -105,7 +115,6 @@ class TechNewsRecipe(BasicNewsRecipe):
 
     def preprocess_html(self, soup):
         for img in soup.find_all('img'):
-            # 处理懒加载图片
             real_src = img.get('data-src') or img.get('data-original') or img.get('src', '')
             if real_src:
                 if real_src.startswith('//'):
@@ -113,7 +122,6 @@ class TechNewsRecipe(BasicNewsRecipe):
                 elif real_src.startswith('/'):
                     real_src = 'https://technews.tw' + real_src
                 img['src'] = real_src
-        # 移除分享、广告等干扰元素
         for tag in soup.find_all('div', class_=re.compile(r'ad|share|social|paywall', re.I)):
             tag.decompose()
         return soup
@@ -141,7 +149,6 @@ class TechNewsRecipe(BasicNewsRecipe):
         img = Image.new('RGB', (width, height), color=background_color)
         draw = ImageDraw.Draw(img)
 
-        # 获取或安装字体
         font_path = ensure_chinese_font()
         font_large_size = 80
         font_small_size = 40
@@ -151,32 +158,16 @@ class TechNewsRecipe(BasicNewsRecipe):
                 font_large = ImageFont.truetype(font_path, font_large_size)
                 font_small = ImageFont.truetype(font_path, font_small_size)
             else:
-                # 如果没有中文字体，使用默认字体（可能显示方块）
                 font_large = ImageFont.load_default()
                 font_small = ImageFont.load_default()
+        except:
+            font_large = ImageFont.load_default()
+            font_small = ImageFont.load_default()
 
-            # 绘制标题
-            title_text = "科技新报"
-            # 简单居中计算
-            title_w, title_h = draw.textsize(title_text, font=font_large)
-            draw.text(((width - title_w) / 2, (height - title_h) / 2 - 50),
-                      title_text, fill=text_color, font=font_large)
+        draw.text((width//2, height * 0.40), "科技新报 TechNews", font=font_large, fill=text_color, anchor='mm')
+        draw.text((width//2, height * 0.55), datetime.datetime.now().strftime('%Y-%m-%d %H:%M'), font=font_small, fill=text_color, anchor='mm')
 
-            # 绘制日期
-            date_text = datetime.datetime.now().strftime('%Y-%m-%d')
-            date_w, date_h = draw.textsize(date_text, font=font_small)
-            draw.text(((width - date_w) / 2, (height - date_h) / 2 + 50),
-                      date_text, fill=text_color, font=font_small)
-
-        except Exception as e:
-            print(f"生成封面失败: {e}")
-
-        # 将图片保存到临时文件并返回路径
-        cover_path = os.path.join(os.getcwd(), 'technews_cover.jpg')
-        img.save(cover_path, 'JPEG')
-        return 'file://' + cover_path
-
-# 运行配方
-if __name__ == '__main__':
-    recipe = TechNewsRecipe()
-    print(recipe.title)
+        buf = BytesIO()
+        img.save(buf, format='JPEG')
+        buf.seek(0)
+        return buf
