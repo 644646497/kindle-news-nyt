@@ -1,0 +1,51 @@
+name: Send News to Kindle
+
+on:
+  # 定时任务：每天 UTC 1:00 和 13:00 运行（对应北京时间 09:00 和 21:00）
+  schedule:
+    - cron: '0 1 * * *'
+    - cron: '0 13 * * *'
+  
+  # 允许在 GitHub 网页上手动触发，方便随时测试
+  workflow_dispatch:
+
+jobs:
+  send:
+    runs-on: ubuntu-latest
+
+    steps:
+      # 步骤 1：拉取仓库代码
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      # 步骤 2：设置 Python 环境
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+
+      # 步骤 3：安装依赖
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install Pillow opencc-python-reimplemented
+
+      # 步骤 4：安装 Calibre (ebook-convert 依赖)
+      - name: Install Calibre
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y calibre
+
+      # 步骤 5：运行脚本并发送到 Kindle
+      - name: Run Recipe and Send to Kindle
+        env:
+          # 从 GitHub Secrets 中读取你的 Kindle 邮箱和发件邮箱配置
+          KINDLE_EMAIL: ${{ secrets.KINDLE_EMAIL }}
+          SENDER_EMAIL: ${{ secrets.SENDER_EMAIL }}
+          SENDER_PASSWORD: ${{ secrets.SENDER_PASSWORD }}
+        run: |
+          # 使用 Calibre 的 ebook-convert 运行 news_recipe.py
+          ebook-convert news_recipe.py news.epub --output-profile kindle
+          
+          # 调用你现有的发送脚本（请将 send_to_kindle.py 替换为你实际发送脚本的文件名）
+          python send_to_kindle.py news.epub
