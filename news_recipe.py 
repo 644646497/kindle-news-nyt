@@ -1,0 +1,137 @@
+#!/usr/bin/env python
+# vim:fileencoding=utf-8
+from __future__ import unicode_literals, division, absolute_import, print_function
+import re
+import datetime
+import time
+import os
+import subprocess
+from io import BytesIO
+from PIL import Image, ImageDraw, ImageFont
+from calibre.web.feeds.news import BasicNewsRecipe
+
+try:
+    from opencc import OpenCC
+    cc = OpenCC('t2s')
+    CAN_CONVERT = True
+except ImportError:
+    CAN_CONVERT = False
+
+# --- 1. 环境初始化：自动安装中文字体 (解决方块问题) ---
+def ensure_chinese_font():
+    font_paths = [
+        "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
+        "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc"
+    ]
+    for path in font_paths:
+        if os.path.exists(path):
+            return path
+            
+    print(">>> 未检测到中文字体，正在尝试安装...")
+    try:
+        subprocess.run(["sudo", "apt-get", "update"], check=True, capture_output=True)
+        subprocess.run(["sudo", "apt-get", "install", "-y", "fonts-noto-cjk"], check=True, capture_output=True)
+        subprocess.run(["fc-cache", "-f"], check=True, capture_output=True)
+        for path in font_paths:
+            if os.path.exists(path):
+                return path
+    except Exception as e:
+        print(f">>> 安装字体失败: {e}")
+    return None
+
+class UdnNewsRecipe(BasicNewsRecipe):
+    title = '联合报 & 科技新报 - ' + datetime.datetime.now().strftime('%Y-%m-%d %H:%M')
+    language = 'zh-CN'
+    oldest_article = 1
+    max_articles_per_feed = 20
+    auto_cleanup = True
+    no_stylesheets = False
+    remove_javascript = True
+    compress_news_images = True
+    scale_news_images_to = 600
+
+    keep_only_tags = [
+        dict(name='h1'),
+        dict(name='div', attrs={'class': re.compile(r'article-content|article_body|story-article|entry-content|single-post-content', re.I)}),
+        dict(name='article'),
+    ]
+
+    remove_tags = [
+        dict(name='script'), dict(name='style'), dict(name='iframe'),
+        dict(name='nav'), dict(name='header'), dict(name='footer'),
+        dict(name='aside'),
+        dict(name='div', attrs={'class': re.compile(r'ad|share|related|comment|sidebar|tags|meta|social', re.I)}),
+    ]
+
+    def parse_index(self):
+        feeds = []
+        # 同时定义联合报和科技新报的抓取源
+        sections = [
+            ('联合报 - 即时新闻', 'https://udn.com/news/breaknews/1/1'),
+            ('科技新报 - 首页', 'https://technews.tw/')
+        ]
+
+        for section_name, section_url in sections:
+            try:
+                soup = self.index_to_soup(section_url)
+                articles = []
+                seen_urls = set()
+
+                # 根据网站不同，使用不同的正则匹配新闻链接
+                if 'technews.tw' in section_url:
+                    link_pattern = re.compile(r'^/\d{4}/\d{2}/\d{2}/')
+                else:
+                    link_pattern = re.compile(r'/news/story/')
+
+                for link in soup.find_all('a', href=link_pattern):
+                    title = link.get_text(strip=True)
+                    if title and len(title) > 5:
+                        url = link.get('href')
+                        if url.startswith('/'):
+                            url = 'https://' + section_url.split('/')[2] + url
+                        if url in seen_urls:
+                            continue
+                        seen_urls.add(url)
+                        articles.append({'title': title, 'url': url, 'date': '', 'description': ''})
+                    if len(articles) >= self.max_articles_per_feed:
+                        break
+
+                if articles:
+                    feeds.append((section_name, articles))
+            except Exception as e:
+                self.log.error(f"抓取 {section_name} 失败: {e}")
+
+        return feeds
+
+    def preprocess_html(self, soup):
+        for img in soup.find_all('img'):
+            real_src = img.get('data-src') or img.get('data-original') or img.get('src', '')
+            if real_src:
+                if real_src.startswith('//'):
+                    real_src = 'https:' + real_src
+                elif real_src.startswith('/'):
+                    real_src = 'https://technews.tw' + real_src
+                img['src'] = real_src
+        for tag in soup.find_all('div', class_=re.compile(r'ad|share|social', re.I)):
+            tag.decompose()
+        return soup
+
+    def postprocess_html(self, soup, first_fetch):
+        if CAN_CONVERT:
+            for element in soup.find_all(string=True):
+                text = str(element)
+                if len(text) > 3:
+                    if element.parent and element.parent.name not in ['script', 'style']:
+                        try:
+                            converted = cc.convert(text)
+                            if converted != text:
+                                element.replace_with(converted)
+                        except:
+                            pass
+        return soup
+
+    def get_cover_url(self):
+        """动态生成封面：标题 + 日期时间"""
+        width, height = 600, 800
+        img = Image.new('RGB', (width, height), color='white')
+        draw = ImageDraw.Draw(im
