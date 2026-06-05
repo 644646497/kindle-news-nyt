@@ -5,6 +5,7 @@ from calibre.ebooks.BeautifulSoup import BeautifulSoup
 # 引入繁简转换库
 try:
     from opencc import OpenCC
+    # t2s = Traditional to Simplified (繁体转简体)
     cc = OpenCC('t2s')
     CAN_CONVERT = True
 except ImportError:
@@ -16,13 +17,13 @@ time.tzset()
 
 class AdvancedUserRecipeTechNews(BasicNewsRecipe):
     title = datetime.datetime.now().strftime('科技新报(简体版) - %Y-%m-%d')
-    language = 'zh_CN'
-    oldest_article = 1  # 只抓当天的
-    max_articles_per_feed = 20  # 稍微多抓一点，给过滤留余地
+    language = 'zh_CN'  # 设置为简体中文区域
+    oldest_article = 1
+    max_articles_per_feed = 15
     auto_cleanup = True
     auto_cleanup_keep = '//h1|//div[@class="entry-content"]'
 
-    # 核心保留标签
+    # 核心保留标签：只保留标题和正文内容区
     keep_only_tags = [
         dict(name='h1'),
         dict(name='div', attrs={'class': 'entry-content'})
@@ -39,70 +40,55 @@ class AdvancedUserRecipeTechNews(BasicNewsRecipe):
         dict(name='header'),
         dict(name='form'),
         dict(name='iframe'),
+        # 移除包含特定关键词的元素 (如广告、分享按钮)
         dict(name='div', attrs={'class': re.compile(r'tag|sidebar|ad|related|share|entry-meta|author-box')}),
     ]
 
-    def filter_articles(self, articles, log):
-        """
-        强力过滤：剔除所有看起来像“财报快讯”的文章
-        """
-        filtered = []
-        # 定义财报类文章的“黑名单”关键词
-        financial_keywords = ['營收', '营收', '月增', '月減', '年增', '月减', '年減', '財報', 'EPS', '毛利率']
-
-        for article in articles:
-            title = article.get('title', '')
-            url = article.get('url', '').lower()
-
-            # 1. 检查标题是否包含财报关键词
-            is_financial = any(keyword in title for keyword in financial_keywords)
-
-            # 2. 检查 URL 是否属于 finance 子域名 (双重保险)
-            is_finance_domain = 'finance.technews.tw' in url
-
-            if not is_financial and not is_finance_domain:
-                filtered.append(article)
-            else:
-                log.debug(f"已过滤财报文章: {title}")
-
-        return filtered
-
     def preprocess_html(self, soup):
-        """预处理 HTML"""
-        # 清理底部版权信息
+        """
+        预处理 HTML：清理页面底部的尾巴、赞助商图片和链接
+        """
+        # 1. 强力清理底部版权信息 ("This article was downloaded by calibre...")
+        # Calibre 会自动添加这个，我们通过查找特定文本将其删除
         for tag in soup.find_all(text=re.compile(r'This article was downloaded by calibre')):
             parent = tag.parent
             if parent:
                 parent.decompose()
 
-        # 清理赞助相关内容
+        # 2. 清理“喝咖啡”赞助相关的图片和文字
+        # 查找包含 "想請我們喝幾杯咖啡" 或 "贊助" 的段落并删除
         for tag in soup.find_all(string=re.compile(r'喝咖啡|贊助|Support us')):
+            # 向上查找父级 div 或 p 标签进行删除，确保删干净
             p = tag.find_parent(['div', 'p', 'section'])
             if p:
                 p.decompose()
 
-        # 清理特定链接
+        # 3. 清理所有指向 technews.tw 首页或赞助页面的链接 (通常是那个咖啡杯 Logo)
         for a in soup.find_all('a', href=re.compile(r'technews\.tw/$|buycoffee')):
             a.decompose()
 
-        # 清理特定图片
+        # 4. 清理图片中的赞助 Logo (如果它是独立的 img 标签且 src 包含 coffee)
         for img in soup.find_all('img', src=re.compile(r'coffee|donate')):
             img.decompose()
 
         return soup
 
     def postprocess_html(self, soup, first_fetch):
-        """后处理：繁体转简体"""
+        """
+        后处理：将繁体中文转换为简体中文
+        """
         if not CAN_CONVERT:
             return soup
 
+        # 遍历所有文本节点进行转换
+        # 注意：直接修改 soup 的 string 属性
         for element in soup.find_all(string=True):
             original_text = str(element)
+            # 简单的判断，如果有繁体字特征则转换，或者直接全量转换
             converted_text = cc.convert(original_text)
             if converted_text != original_text:
                 element.replace_with(converted_text)
 
         return soup
 
-    # 使用主站 Feed，依靠 filter_articles 进行清洗
-    feeds = [('科技新报全站', 'https://technews.tw/feed')]
+    feeds = [('科技新报全站', 'https://technews.tw/feed')]  
