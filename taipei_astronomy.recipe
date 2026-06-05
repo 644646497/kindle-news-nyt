@@ -1,5 +1,41 @@
-    # ... (前面的代码保持不变) ...
+import os, time, re, datetime
+from calibre.web.feeds.news import BasicNewsRecipe
+from calibre.ebooks.BeautifulSoup import BeautifulSoup
 
+# 引入繁简转换库
+try:
+    from opencc import OpenCC
+    cc = OpenCC('t2s')
+    CAN_CONVERT = True
+except ImportError:
+    print("警告: 未找到 opencc 库，将跳过繁简转换。")
+    CAN_CONVERT = False
+
+os.environ['TZ'] = 'Asia/Shanghai'
+time.tzset()
+
+# 注意：类定义必须顶格
+class AdvancedUserRecipeTechNews(BasicNewsRecipe):
+    title = datetime.datetime.now().strftime('科技新报(简体版) - %Y-%m-%d')
+    language = 'zh_CN'
+    oldest_article = 1
+    max_articles_per_feed = 15
+    auto_cleanup = True
+    auto_cleanup_keep = '//h1|//div[@class="entry-content"]'
+
+    keep_only_tags = [
+        dict(name='h1'),
+        dict(name='div', attrs={'class': 'entry-content'})
+    ]
+
+    remove_tags = [
+        dict(name='hr'), dict(name='script'), dict(name='style'),
+        dict(name='aside'), dict(name='footer'), dict(name='nav'),
+        dict(name='header'), dict(name='form'), dict(name='iframe'),
+        dict(name='div', attrs={'class': re.compile(r'tag|sidebar|ad|related|share|entry-meta|author-box')}),
+    ]
+
+    # 【关键修复点】：确保 def 前面有且只有 4 个空格，不要多也不要少
     def filter_articles(self, articles, log):
         """
         过滤文章：只保留符合“首页”调性的文章，剔除纯财报快讯
@@ -9,26 +45,47 @@
             title = article.get('title', '').lower()
             url = article.get('url', '').lower()
 
-            # 1. 排除财经子域名的文章 (虽然主站RSS通常不含这些，但以防万一)
+            # 1. 排除财经子域名的文章
             if 'finance.technews.tw' in url:
                 continue
 
             # 2. 排除典型的“财报快讯”标题特征
-            # 首页通常不会放这种纯数据的短讯
             if any(keyword in title for keyword in ['營收', '財報', '月增', '年增']):
-                # 除非标题很长（可能是深度分析），否则跳过短标题的财报
                 if len(title) < 15:
                     continue
-
-            # 3. 排除特定的非新闻分类（可选，根据需要调整）
-            # 比如你想看所有分类，就不需要这一步；如果想只看科技，可以加判断
 
             filtered.append(article)
 
         return filtered
 
-    # 修改 feeds 列表
-    # 这里使用主站 Feed，它最接近首页内容
+    def preprocess_html(self, soup):
+        # ... 你的 preprocess_html 代码保持不变 ...
+        for tag in soup.find_all(text=re.compile(r'This article was downloaded by calibre')):
+            parent = tag.parent
+            if parent:
+                parent.decompose()
+        for tag in soup.find_all(string=re.compile(r'喝咖啡|贊助|Support us')):
+            p = tag.find_parent(['div', 'p', 'section'])
+            if p:
+                p.decompose()
+        for a in soup.find_all('a', href=re.compile(r'technews\.tw/$|buycoffee')):
+            a.decompose()
+        for img in soup.find_all('img', src=re.compile(r'coffee|donate')):
+            img.decompose()
+        return soup
+
+    def postprocess_html(self, soup, first_fetch):
+        # ... 你的 postprocess_html 代码保持不变 ...
+        if not CAN_CONVERT:
+            return soup
+        for element in soup.find_all(string=True):
+            original_text = str(element)
+            converted_text = cc.convert(original_text)
+            if converted_text != original_text:
+                element.replace_with(converted_text)
+        return soup
+
+    # 【关键修复点】：feeds 也必须缩进 4 个空格，属于类的一部分
     feeds = [
         ('科技新报 - 首页精选', 'https://technews.tw/feed/'),
     ]
