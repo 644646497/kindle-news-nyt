@@ -9,9 +9,7 @@ try:
     from opencc import OpenCC
     cc = OpenCC('t2s')
     CAN_CONVERT = True
-    print("✅ opencc 加载成功")
 except ImportError:
-    print("⚠️ opencc 未安装")
     CAN_CONVERT = False
 
 class UdnNewsRecipe(BasicNewsRecipe):
@@ -91,20 +89,21 @@ class UdnNewsRecipe(BasicNewsRecipe):
         return soup
     
     def postprocess_html(self, soup, first_fetch):
-        if not CAN_CONVERT:
-            return soup
-        
-        count = 0
-        for element in soup.find_all(string=True):
-            text = str(element)
-            if len(text) < 3:
-                continue
-            if element.parent and element.parent.name in ['script', 'style']:
-                continue
-            
-            try:
-                converted = cc.convert(text)
-                if converted != text:
+        if CAN_CONVERT:
+            for element in soup.find_all(string=True):
+                text = str(element)
+                if len(text) > 3 and element.parent.name not in ['script', 'style']:
+                    try:
+                        converted = cc.convert(text)
+                        if converted != text:
+                            element.replace_with(converted)
+                    except:
+                        pass
+        return soup
+
+if __name__ == "__main__":
+    from calibre.web.feeds.recipes.utils import cli
+    cli(UdnNewsRecipe)                if converted != text:
                     element.replace_with(converted)
                     count += 1
             except:
