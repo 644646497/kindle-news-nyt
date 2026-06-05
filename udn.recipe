@@ -5,106 +5,35 @@ from calibre.web.feeds.news import BasicNewsRecipe
 class UdnNewsRecipe(BasicNewsRecipe):
     title = '联合新闻网 - ' + datetime.datetime.now().strftime('%Y-%m-%d')
     language = 'zh-CN'
-    
     oldest_article = 1
     max_articles_per_feed = 15
     auto_cleanup = True
     
-    feeds = [
-        ('即时新闻', 'https://udn.com/news/breaknews/1/1'),
-    ]
-    
     def parse_index(self):
         feeds = []
-        sections = [
-            ('即时新闻', 'https://udn.com/news/breaknews/1/1'),
-        ]
+        url = 'https://udn.com/news/breaknews/1/1'
+        soup = self.index_to_soup(url)
+        articles = []
         
-        for section_name, section_url in sections:
-            try:
-                soup = self.index_to_soup(section_url)
-                articles = []
-                
-                for link in soup.find_all('a', href=re.compile(r'/news/story/')):
-                    title = link.get_text(strip=True)
-                    if title and len(title) > 5:
-                        url = link.get('href')
-                        if url.startswith('/'):
-                            url = 'https://udn.com' + url
-                        articles.append({
-                            'title': title,
-                            'url': url,
-                            'date': '',
-                            'description': ''
-                        })
-                    if len(articles) >= self.max_articles_per_feed:
-                        break
-                
-                if articles:
-                    feeds.append((section_name, articles))
-            except Exception as e:
-                self.log.error(str(e))
+        for link in soup.find_all('a', href=re.compile(r'/news/story/')):
+            title = link.get_text(strip=True)
+            if title and len(title) > 5:
+                article_url = link.get('href')
+                if article_url.startswith('/'):
+                    article_url = 'https://udn.com' + article_url
+                articles.append({
+                    'title': title,
+                    'url': article_url,
+                    'date': '',
+                    'description': ''
+                })
+            if len(articles) >= self.max_articles_per_feed:
+                break
         
-        return feeds                    element.replace_with(converted)
-                    count += 1
-            except:
-                pass
+        if articles:
+            feeds.append(('即时新闻', articles))
         
-        return soup
-
-if __name__ == "__main__":
-    from calibre.web.feeds.recipes.utils import cli
-    cli(UdnNewsRecipe)        if not CAN_CONVERT:
-            print("⚠️ 跳过繁转简")
-            return soup
-        
-        print("✅ 开始繁转简...")
-        count = 0
-        
-        # 遍历所有文本节点，强制转换
-        for element in soup.find_all(string=True):
-            text = str(element)
-            
-            # 跳过太短的和代码区域
-            if len(text) < 3:
-                continue
-            if element.parent and element.parent.name in ['script', 'style']:
-                continue
-            
-            try:
-                converted = cc.convert(text)
-                if converted != text:
-                    element.replace_with(converted)
-                    count += 1
-            except:
-                pass
-        
-        print(f"✅ 转换了 {count} 个文本片段")
-        return soup
-
-if __name__ == "__main__":
-    from calibre.web.feeds.recipes.utils import cli
-    cli(UdnNewsRecipe)            print("⚠️ opencc 未安装，跳过繁转简")
-            return soup
-        
-        print("✅ 开始繁转简...")
-        count = 0
-        
-        content = soup.find('div', attrs={'class': re.compile(r'article-content|article_body|story-article')})
-        if not content:
-            content = soup.body
-        
-        if content:
-            for element in content.find_all(string=True):
-                original = str(element)
-                if len(original) < 5:
-                    continue
-                if element.parent and element.parent.name in ['script', 'style']:
-                    continue
-                
-                try:
-                    converted = cc.convert(original)
-                    if converted != original:
+        return feeds                    if converted != original:
                         element.replace_with(converted)
                         count += 1
                 except Exception:
