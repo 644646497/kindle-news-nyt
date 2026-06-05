@@ -5,10 +5,9 @@ import re
 import datetime
 from calibre.web.feeds.news import BasicNewsRecipe
 
-# 引入繁简转换库
 try:
     from opencc import OpenCC
-    cc = OpenCC('t2s')  # 繁体转简体
+    cc = OpenCC('t2s')
     CAN_CONVERT = True
     print("✅ opencc 加载成功")
 except ImportError:
@@ -26,24 +25,25 @@ class UdnNewsRecipe(BasicNewsRecipe):
     no_stylesheets = False
     remove_javascript = True
     
-    # 图片压缩设置
     compress_news_images = True
     compress_news_images_auto_size = 10
     scale_news_images = True
     scale_news_images_to = 600
     
+    # 🔧 关键：只保留正文容器和它内部的图片
     keep_only_tags = [
         dict(name='h1'),
         dict(name='div', attrs={'class': re.compile(r'article-content|article_body|story-article|entry-content')}),
         dict(name='article'),
-        dict(name='img'),  # 明确保留图片标签
     ]
     
+    # 🔧 移除所有噪音区域
     remove_tags = [
         dict(name='script'), dict(name='style'), dict(name='iframe'),
         dict(name='nav'), dict(name='header'), dict(name='footer'),
         dict(name='aside'),
-        dict(name='div', attrs={'class': re.compile(r'ad|share|related|comment|sidebar|tags|meta', re.I)}),
+        dict(name='div', attrs={'class': re.compile(r'ad|share|related|comment|sidebar|tags|meta|hot|popular|recommend', re.I)}),
+        dict(name='div', attrs={'id': re.compile(r'ad|share|related|sidebar', re.I)}),
     ]
     
     def parse_index(self):
@@ -82,29 +82,63 @@ class UdnNewsRecipe(BasicNewsRecipe):
         return feeds
     
     def preprocess_html(self, soup):
-        """预处理：清理广告和处理图片"""
-        # 1. 清理广告等噪音
+        """预处理：清理所有噪音区域"""
+        
+        # 1. 先移除广告和分享按钮
         for tag in soup.find_all('div', class_=re.compile(r'ad|share|social', re.I)):
             tag.decompose()
         
-        # 2. 🔧 手动处理图片：将懒加载的图片地址提取出来
+        # 2. 🔧 移除“热门新闻”、“推荐阅读”等区域
+        for tag in soup.find_all('div', class_=re.compile(r'hot|popular|recommend|related|latest', re.I)):
+            tag.decompose()
+        
+        # 3. 🔧 移除侧边栏（通常有 sidebar 或 aside 标识）
+        for tag in soup.find_all(['aside', 'div'], class_=re.compile(r'sidebar', re.I)):
+            tag.decompose()
+        
+        # 4. 🔧 处理懒加载图片：将 data-src 转为 src
         for img in soup.find_all('img'):
-            # 联合新闻网可能使用 data-src 或 data-original 来存储真实图片地址
-            data_src = img.get('data-src') or img.get('data-original')
-            if data_src:
-                img['src'] = data_src  # 替换为真实地址
+            # 获取真实图片地址
+            real_src = img.get('data-src') or img.get('data-original') or img.get('src', '')
             
-            # 确保 src 是完整的 URL
-            src = img.get('src', '')
-            if src and src.startswith('//'):
-                img['src'] = 'https:' + src
-            elif src and src.startswith('/'):
-                img['src'] = 'https://udn.com' + src
+            if real_src:
+                # 补全相对路径
+                if real_src.startswith('//'):
+                    real_src = 'https:' + real_src
+                elif real_src.startswith('/'):
+                    real_src = 'https://udn.com' + real_src
+                
+                img['src'] = real_src
+            
+            # 删除无关属性
+            for attr in ['data-src', 'data-original', 'class', 'id', 'width', 'height']:
+                if attr in img.attrs:
+                    del img.attrs[attr]
         
         return soup
     
     def postprocess_html(self, soup, first_fetch):
         """后处理：繁体转简体"""
+        if not CAN_CONVERT:
+            return soup
+        
+        # 🔧 只处理正文区域，提高速度和准确性
+        content = soup.find('div', attrs={'class': re.compile(r'article-content|article_body|story-article')})
+        if not content:
+            content = soup.body
+        
+        if content:
+            for element in content.find_all(string=True):
+                original = str(element)
+                if len(original) < 5:
+                    continue
+                if element.parent and element.parent.name in ['script', 'style']:
+                    continue
+                
+                try:
+                    converted = cc.convert(original)
+                    if converted != original:
+                        element.replace_with(converted        """后处理：繁体转简体"""
         if not CAN_CONVERT:
             print("⚠️ opencc 未安装，跳过繁转简")
             return soup
