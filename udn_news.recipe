@@ -1,0 +1,95 @@
+import re, datetime
+from calibre.web.feeds.news import BasicNewsRecipe
+
+try:
+    from deep_translator import GoogleTranslator
+    translator = GoogleTranslator(source='zh-TW', target='zh-CN')  # 繁体转简体
+    CAN_TRANSLATE = True
+except ImportError:
+    print("警告: 未安装 deep-translator，将保留繁体原文")
+    CAN_TRANSLATE = False
+
+class UdnNewsRecipe(BasicNewsRecipe):
+    title = f'联合新闻网 - {datetime.datetime.now().strftime("%Y-%m-%d")}'
+    language = 'zh-CN'
+    
+    # 抓取设置
+    oldest_article = 1          # 只抓今天
+    max_articles_per_feed = 20  # 每类最多20篇
+    auto_cleanup = True
+    no_stylesheets = False
+    
+    # 图片压缩（可选）
+    compress_news_images = True
+    compress_news_images_auto_size = 10
+    scale_news_images = True
+    scale_news_images_to = 600
+    
+    # 保留正文内容
+    keep_only_tags = [
+        dict(name='h1'),                           # 标题
+        dict(name='div', attrs={'class': re.compile(r'article-content|article_body|story-article')}),  # 正文容器
+        dict(name='div', attrs={'id': 'article_body'}),  # 备用ID
+        dict(name='article'),                      # 语义标签
+    ]
+    
+    # 移除噪音
+    remove_tags = [
+        dict(name='script'), dict(name='style'), dict(name='iframe'),
+        dict(name='nav'), dict(name='header'), dict(name='footer'),
+        dict(name='aside'), dict(name='form'),
+        dict(name='div', attrs={'class': re.compile(r'ad|share|related|comment|sidebar|tags|meta', re.I)}),
+        dict(name='div', attrs={'id': re.compile(r'ad|share|comment', re.I)}),
+    ]
+    
+    # 主要 RSS 源
+    feeds = [
+        ('焦点要闻', 'https://udn.com/rss/breaknews.xml'),
+        ('政治', 'https://udn.com/rss/news/political.xml'),
+        ('财经', 'https://udn.com/rss/news/finance.xml'),
+        ('科技', 'https://udn.com/rss/news/tech.xml'),
+        ('国际', 'https://udn.com/rss/news/world.xml'),
+        ('两岸', 'https://udn.com/rss/news/crossstrait.xml'),
+    ]
+    
+    def preprocess_html(self, soup):
+        """预处理：清理噪音元素"""
+        # 移除广告区块
+        for tag in soup.find_all('div', class_=re.compile(r'ads|advertisement', re.I)):
+            tag.decompose()
+        
+        # 移除"分享到"按钮
+        for tag in soup.find_all('div', class_=re.compile(r'share|social', re.I)):
+            tag.decompose()
+        
+        return soup
+    
+    def postprocess_html(self, soup, first_fetch):
+        """后处理：繁体转简体"""
+        if not CAN_TRANSLATE:
+            return soup
+        
+        # 获取正文容器
+        content = soup.find('div', class_=re.compile(r'article-content|article_body')) or soup.body
+        
+        if content:
+            # 翻译所有文本段落
+            for tag in content.find_all(['h1', 'h2', 'h3', 'p', 'li', 'figcaption']):
+                original = tag.get_text(strip=True)
+                if len(original) < 10:
+                    continue
+                # 跳过已经是简体的
+                if re.search(r'[\u4e00-\u9fff]', original) and len(re.findall(r'[著髮裡][为实][体关]', original)) > 0:
+                    continue
+                try:
+                    translated = translator.translate(original)
+                    if translated and translated != original:
+                        if len(tag.contents) == 1:
+                            tag.string = translated
+                        else:
+                            tag.clear()
+                            tag.append(translated)
+                except Exception:
+                    continue
+        
+        return soup
