@@ -13,7 +13,8 @@ except ImportError:
     CAN_CONVERT = False
 
 class UdnNewsRecipe(BasicNewsRecipe):
-    title = '联合新闻网 - ' + datetime.datetime.now().strftime('%Y-%m-%d %H:%M')
+    # 书名：简洁版（不带日期）
+    title = '联合新闻网'
     language = 'zh-CN'
     oldest_article = 1
     max_articles_per_feed = 20
@@ -22,7 +23,11 @@ class UdnNewsRecipe(BasicNewsRecipe):
     remove_javascript = True
     compress_news_images = True
     scale_news_images_to = 600
-    cover_url = 'https://udn.com/favicon.ico'
+    
+    # 生成带日期的封面
+    def get_cover_url(self):
+        # 使用联合新闻网的 Logo 作为封面底图，然后 Calibre 会自动加上标题和日期
+        return 'https://udn.com/favicon.ico'
     
     keep_only_tags = [
         dict(name='h1'),
