@@ -24,8 +24,8 @@ def ensure_dependencies():
     try:
         from opencc import OpenCC
     except ImportError:
-        print(">>> 正在安装 opencc 繁简转换库...")
-        subprocess.run([sys.executable, "-m", "pip", "install", "opencc-python-reimplemented"], check=True)
+        print(">>> 正在安装繁简转换库 opencc...")
+        subprocess.run([sys.executable, "-m", "pip", "install", "opencc-python-reimplemented"], check=True, capture_output=True)
 
 ensure_dependencies()
 
@@ -35,22 +35,23 @@ class UdnNewsRecipe(BasicNewsRecipe):
     oldest_article = 1
     max_articles_per_feed = 20
     auto_cleanup = True
+    no_stylesheets = False
     remove_javascript = True
     compress_news_images = True
     scale_news_images_to = 600
 
-    # 【关键修改】只保留文章开头的图片和正文内容
-    keep_only_tags = [
-        dict(name='div', attrs={'class': re.compile(r'photo-story|article-content', re.I)}),
-        dict(name='img')
-    ]
-
-    # 移除广告和无关元素
+    # 移除无关标签
     remove_tags = [
         dict(name='script'), dict(name='style'), dict(name='iframe'),
         dict(name='nav'), dict(name='header'), dict(name='footer'),
         dict(name='aside'),
-        dict(name='div', attrs={'class': re.compile(r'ad|share|related|comment|sidebar|tags|meta|story-beside', re.I)}),
+        dict(name='div', attrs={'class': re.compile(r'ad|share|related|comment|sidebar|tags|meta', re.I)}),
+    ]
+
+    # 只保留文章开头的图片和正文内容
+    keep_only_tags = [
+        dict(name='div', attrs={'class': 'photo-story'}),  # 开头图片
+        dict(name='div', attrs={'class': 'article-content'}),  # 正文内容
     ]
 
     def get_cover_url(self):
@@ -63,10 +64,10 @@ class UdnNewsRecipe(BasicNewsRecipe):
         draw = ImageDraw.Draw(img)
 
         try:
-            # 尝试加载字体，如果失败则使用默认字体
             font_big = ImageFont.truetype("/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc", 70)
             font_small = ImageFont.truetype("/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc", 40)
-        except Exception:
+        except Exception as e:
+            print(f"字体加载失败: {e}")
             font_big = ImageFont.load_default()
             font_small = ImageFont.load_default()
 
@@ -122,14 +123,24 @@ class UdnNewsRecipe(BasicNewsRecipe):
                     real_src = 'https://udn.com' + real_src
                 img['src'] = real_src
 
-        # 清理掉不需要的标签（配合 keep_only_tags 使用）
+        # 删除广告和分享按钮
         for tag in soup.find_all('div', class_=re.compile(r'ad|share|social', re.I)):
             tag.decompose()
+
         return soup
 
     def postprocess_html(self, soup, first_fetch):
         """将繁体中文转换为简体中文"""
         try:
+            from opencc import OpenCC
+            cc = OpenCC('t2s')  # t2s 表示 Traditional to Simplified
+
+            # 遍历所有文本节点进行转换
+            for element in soup.find_all(string=True):
+                if element.strip():
+                    converted_text = cc.convert(element)
+                    if converted_text != element:
+                        elem        try:
             from opencc import OpenCC
             cc = OpenCC('t2s')  # t2s 表示 Traditional to Simplified
 
