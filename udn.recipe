@@ -7,121 +7,109 @@ import subprocess
 from io import BytesIO
 from PIL import Image, ImageDraw, ImageFont
 from calibre.web.feeds.news import BasicNewsRecipe
-from calibre.ebooks.BeautifulSoup import BeautifulSoup
 
 # --- 1. 设置时区 ---
 os.environ['TZ'] = 'Asia/Shanghai'
 time.tzset()
 
-# --- 2. 自动安装中文字体 (针对 GitHub Actions / Ubuntu 环境) ---
-def ensure_chinese_font():
+# --- 2. 自动安装中文字体和繁简转换库 (针对 GitHub Actions / Ubuntu 环境) ---
+def ensure_dependencies():
     font_path = "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc"
     if not os.path.exists(font_path):
         print(">>> 正在安装中文字体库...")
         subprocess.run(["sudo", "apt-get", "update"], check=True, capture_output=True)
         subprocess.run(["sudo", "apt-get", "install", "-y", "fonts-noto-cjk"], check=True, capture_output=True)
-        print(">>> 字体安装完成。")
-    return font_path
 
-FONT_PATH = ensure_chinese_font()
+    try:
+        from opencc import OpenCC
+    except ImportError:
+        print(">>> 正在安装繁简转换库 opencc...")
+        subprocess.run([sys.executable, "-m", "pip", "install", "opencc-python-reimplemented"], check=True, capture_output=True)
+
+ensure_dependencies()
 
 class UdnNewsRecipe(BasicNewsRecipe):
     title = '联合报'
     language = 'zh_CN'
     oldest_article = 1
     max_articles_per_feed = 20
-    auto_cleanup = False  # 关闭自动清理，因为我们使用 keep_only_tags 精确控制
-    no_stylesheets = True
+    auto_cleanup = True
+    no_stylesheets = False
     remove_javascript = True
     compress_news_images = True
     scale_news_images_to = 600
-    
-    # --- 繁简转换核心 ---
-    def postprocess_html(self, soup, first_fetch):
-        try:
-            from opencc import OpenCC
-            cc = OpenCC('t2s')  # 繁体转简体
-            for element in soup.find_all(text=True):
-                if element.parent.name in ['script', 'style', 'a']:
-                    continue
-                converted = cc.convert(element)
-                if converted != element:
-                    element.replace_with(converted)
-        except ImportError:
-            self.log.warn('未找到 opencc 库，跳过繁简转换。')
-        return soup
 
-    # --- 封面生成 ---
+    # 移除无关标签
+    remove_tags = [
+        dict(name='script'), dict(name='style'), dict(name='iframe'),
+        dict(name='nav'), dict(name='header'), dict(name='footer'),
+        dict(name='aside'),
+        dict(name='div', attrs={'class': re.compile(r'ad|share|related|comment|sidebar|tags|meta', re.I)}),
+    ]
+
+    # 只保留文章开头的图片和正文内容
+    keep_only_tags = [
+        dict(name='div', attrs={'class': 'photo-story'}),
+        dict(name='div', attrs={'class': 'article-content'}),
+    ]
+
     def get_cover_url(self):
         """动态生成封面：标题 + 日期时间"""
         now_dt = datetime.datetime.now()
         date_str = now_dt.strftime('%Y年%m月%d日 %H:%M')
-        
+
         width, height = 600, 800
         img = Image.new('RGB', (width, height), color='white')
         draw = ImageDraw.Draw(img)
-        
+
         try:
-            # 尝试加载大号字体
-            font_big = ImageFont.truetype(FONT_PATH, 80)
-            font_small = ImageFont.truetype(FONT_PATH, 40)
+            font_big = ImageFont.truetype("/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc", 70)
+            font_small = ImageFont.truetype("/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc", 40)
         except Exception as e:
             print(f"字体加载失败: {e}")
             font_big = ImageFont.load_default()
             font_small = ImageFont.load_default()
-        
-        # 绘制主标题 "联合报"
+
         draw.text((width//2, height * 0.35), "联合报", font=font_big, fill='black', anchor='mm')
-        
-        # 绘制副标题 "YYYY年MM月DD日 HH:MM"
         draw.text((width//2, height * 0.50), date_str, font=font_small, fill='black', anchor='mm')
-        
+
         buf = BytesIO()
         img.save(buf, format='PNG')
         buf.seek(0)
         return buf
 
-    # --- 内容抓取与筛选 ---
     def parse_index(self):
         feeds = []
         sections = [('即时新闻', 'https://udn.com/news/breaknews/1/1')]
-        
+
         for section_name, section_url in sections:
             try:
                 soup = self.index_to_soup(section_url)
                 articles = []
                 seen_urls = set()
-                
-                # 寻找新闻链接
+
                 for link in soup.find_all('a', href=re.compile(r'/news/story/')):
                     title = link.get_text(strip=True)
-                    url = link.get('href')
-                    
-                    # 过滤无效链接和重复链接
-                    if title and len(title) > 3 and url and url.startswith('/'):
-                        full_url = 'https://udn.com' + url
-                        if full_url in seen_urls:
+                    if title and len(title) > 5:
+                        url = link.get('href')
+                        if url.startswith('/'):
+                            url = 'https://udn.com' + url
+                        if url in seen_urls:
                             continue
-                        seen_urls.add(full_url)
-                        articles.append({
-                            'title': title, 
-                            'url': full_url, 
-                            'date': '', 
-                            'description': ''
-                        })
+                        seen_urls.add(url)
+                        articles.append({'title': title, 'url': url, 'date': '', 'description': ''})
                     if len(articles) >= self.max_articles_per_feed:
                         break
-                
+
                 if articles:
                     feeds.append((section_name, articles))
             except Exception as e:
-                self.log.error(f"抓取 {section_name} 失败: {e}")
-        
+                self.log.error(str(e))
+
         return feeds
 
-    # --- HTML 预处理 (修复图片懒加载) ---
     def preprocess_html(self, soup):
-        # 修复图片懒加载
+        """处理图片懒加载链接"""
         for img in soup.find_all('img'):
             real_src = img.get('data-src') or img.get('data-original') or img.get('src', '')
             if real_src:
@@ -130,14 +118,30 @@ class UdnNewsRecipe(BasicNewsRecipe):
                 elif real_src.startswith('/'):
                     real_src = 'https://udn.com' + real_src
                 img['src'] = real_src
-        
-        # 移除明显的广告和干扰元素
-        for tag in soup.find_all(['div', 'section'], class_=re.compile(r'ad|share|social|recommend|footer', re.I)):
+
+        for tag in soup.find_all('div', class_=re.compile(r'ad|share|social', re.I)):
             tag.decompose()
-            
+
         return soup
 
-    # --- 严格保留标签 (只保留开头图片和正文) ---
-    # 注意：keep_only_tags 会覆盖 remove_tags
-    keep_only_tags = [
-        # 保留文章顶部的大图 (联合报通常的 
+    def postprocess_html(self, soup, first_fetch):
+        """将繁体中文转换为简体中文"""
+        try:
+            from opencc import OpenCC
+            cc = OpenCC('t2s')
+            
+            # 简化版文本转换逻辑，避免缩进错误
+            for text_node in soup.find_all(text=True):
+                original_text = str(text_node)
+                converted_text = cc.convert(original_text)
+                if original_text != converted_text:
+                    text_node.replace_with(converted_text)
+                    
+        except ImportError:
+            self.log.warn("未找到 opencc 库，跳过繁简转换。")
+
+        return soup
+
+if __name__ == "__main__":
+    from calibre.web.feeds.recipes.utils import cli
+    cli(UdnNewsRecipe)
