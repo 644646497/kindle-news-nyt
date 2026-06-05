@@ -30,20 +30,17 @@ class UdnNewsRecipe(BasicNewsRecipe):
     scale_news_images = True
     scale_news_images_to = 600
     
-    # 🔧 关键：只保留正文容器和它内部的图片
     keep_only_tags = [
         dict(name='h1'),
         dict(name='div', attrs={'class': re.compile(r'article-content|article_body|story-article|entry-content')}),
         dict(name='article'),
     ]
     
-    # 🔧 移除所有噪音区域
     remove_tags = [
         dict(name='script'), dict(name='style'), dict(name='iframe'),
         dict(name='nav'), dict(name='header'), dict(name='footer'),
         dict(name='aside'),
         dict(name='div', attrs={'class': re.compile(r'ad|share|related|comment|sidebar|tags|meta|hot|popular|recommend', re.I)}),
-        dict(name='div', attrs={'id': re.compile(r'ad|share|related|sidebar', re.I)}),
     ]
     
     def parse_index(self):
@@ -82,35 +79,22 @@ class UdnNewsRecipe(BasicNewsRecipe):
         return feeds
     
     def preprocess_html(self, soup):
-        """预处理：清理所有噪音区域"""
-        
-        # 1. 先移除广告和分享按钮
-        for tag in soup.find_all('div', class_=re.compile(r'ad|share|social', re.I)):
+        """预处理：清理噪音区域"""
+        for tag in soup.find_all('div', class_=re.compile(r'ad|share|social|hot|popular|recommend', re.I)):
             tag.decompose()
         
-        # 2. 🔧 移除“热门新闻”、“推荐阅读”等区域
-        for tag in soup.find_all('div', class_=re.compile(r'hot|popular|recommend|related|latest', re.I)):
-            tag.decompose()
-        
-        # 3. 🔧 移除侧边栏（通常有 sidebar 或 aside 标识）
         for tag in soup.find_all(['aside', 'div'], class_=re.compile(r'sidebar', re.I)):
             tag.decompose()
         
-        # 4. 🔧 处理懒加载图片：将 data-src 转为 src
         for img in soup.find_all('img'):
-            # 获取真实图片地址
             real_src = img.get('data-src') or img.get('data-original') or img.get('src', '')
-            
             if real_src:
-                # 补全相对路径
                 if real_src.startswith('//'):
                     real_src = 'https:' + real_src
                 elif real_src.startswith('/'):
                     real_src = 'https://udn.com' + real_src
-                
                 img['src'] = real_src
             
-            # 删除无关属性
             for attr in ['data-src', 'data-original', 'class', 'id', 'width', 'height']:
                 if attr in img.attrs:
                     del img.attrs[attr]
@@ -120,9 +104,12 @@ class UdnNewsRecipe(BasicNewsRecipe):
     def postprocess_html(self, soup, first_fetch):
         """后处理：繁体转简体"""
         if not CAN_CONVERT:
+            print("⚠️ opencc 未安装，跳过繁转简")
             return soup
         
-        # 🔧 只处理正文区域，提高速度和准确性
+        print("✅ 开始繁转简...")
+        count = 0
+        
         content = soup.find('div', attrs={'class': re.compile(r'article-content|article_body|story-article')})
         if not content:
             content = soup.body
@@ -138,28 +125,10 @@ class UdnNewsRecipe(BasicNewsRecipe):
                 try:
                     converted = cc.convert(original)
                     if converted != original:
-                        element.replace_with(converted        """后处理：繁体转简体"""
-        if not CAN_CONVERT:
-            print("⚠️ opencc 未安装，跳过繁转简")
-            return soup
-        
-        print("✅ 开始繁转简...")
-        count = 0
-        
-        for element in soup.find_all(string=True):
-            original = str(element)
-            if len(original) < 5:
-                continue
-            if element.parent and element.parent.name in ['script', 'style']:
-                continue
-            
-            try:
-                converted = cc.convert(original)
-                if converted != original:
-                    element.replace_with(converted)
-                    count += 1
-            except Exception as e:
-                print(f"转换错误: {e}")
+                        element.replace_with(converted)
+                        count += 1
+                except Exception:
+                    pass
         
         print(f"✅ 转换了 {count} 个文本节点")
         return soup
