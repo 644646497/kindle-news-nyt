@@ -1,4 +1,7 @@
-import os, time, re, datetime
+import os
+import time
+import re
+import datetime
 from calibre.web.feeds.news import BasicNewsRecipe
 from calibre.ebooks.BeautifulSoup import BeautifulSoup
 
@@ -14,6 +17,7 @@ except ImportError:
 
 os.environ['TZ'] = 'Asia/Shanghai'
 time.tzset()
+
 
 class AdvancedUserRecipeTechNews(BasicNewsRecipe):
     title = datetime.datetime.now().strftime('科技新报(简体版) - %Y-%m-%d')
@@ -91,4 +95,4 @@ class AdvancedUserRecipeTechNews(BasicNewsRecipe):
 
         return soup
 
-    feeds = [('科技新报全站', 'https://technews.tw/feed')]  
+    feeds = [('科技新报全站', 'https://technews.tw/feed')]
