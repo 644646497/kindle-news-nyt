@@ -26,13 +26,17 @@ class UdnNewsRecipe(BasicNewsRecipe):
     no_stylesheets = False
     remove_javascript = True
     
+    # 图片压缩设置
     compress_news_images = True
+    compress_news_images_auto_size = 10
+    scale_news_images = True
     scale_news_images_to = 600
     
     keep_only_tags = [
         dict(name='h1'),
         dict(name='div', attrs={'class': re.compile(r'article-content|article_body|story-article|entry-content')}),
         dict(name='article'),
+        dict(name='img'),  # 明确保留图片标签
     ]
     
     remove_tags = [
@@ -78,9 +82,25 @@ class UdnNewsRecipe(BasicNewsRecipe):
         return feeds
     
     def preprocess_html(self, soup):
-        """预处理：清理广告和噪音"""
+        """预处理：清理广告和处理图片"""
+        # 1. 清理广告等噪音
         for tag in soup.find_all('div', class_=re.compile(r'ad|share|social', re.I)):
             tag.decompose()
+        
+        # 2. 🔧 手动处理图片：将懒加载的图片地址提取出来
+        for img in soup.find_all('img'):
+            # 联合新闻网可能使用 data-src 或 data-original 来存储真实图片地址
+            data_src = img.get('data-src') or img.get('data-original')
+            if data_src:
+                img['src'] = data_src  # 替换为真实地址
+            
+            # 确保 src 是完整的 URL
+            src = img.get('src', '')
+            if src and src.startswith('//'):
+                img['src'] = 'https:' + src
+            elif src and src.startswith('/'):
+                img['src'] = 'https://udn.com' + src
+        
         return soup
     
     def postprocess_html(self, soup, first_fetch):
@@ -92,10 +112,8 @@ class UdnNewsRecipe(BasicNewsRecipe):
         print("✅ 开始繁转简...")
         count = 0
         
-        # 遍历所有文本节点
         for element in soup.find_all(string=True):
             original = str(element)
-            # 跳过太短的和脚本样式中的文本
             if len(original) < 5:
                 continue
             if element.parent and element.parent.name in ['script', 'style']:
