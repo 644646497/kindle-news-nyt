@@ -134,4 +134,28 @@ class UdnNewsRecipe(BasicNewsRecipe):
         """动态生成封面：标题 + 日期时间"""
         width, height = 600, 800
         img = Image.new('RGB', (width, height), color='white')
-        draw = ImageDraw.Draw(im
+        draw = ImageDraw.Draw(img)
+
+        font_path = ensure_chinese_font()
+        try:
+            if font_path:
+                font_big = ImageFont.truetype(font_path, 70)
+                font_small = ImageFont.truetype(font_path, 40)
+            else:
+                font_big = ImageFont.load_default()
+                font_small = ImageFont.load_default()
+        except:
+            font_big = ImageFont.load_default()
+            font_small = ImageFont.load_default()
+
+        draw.text((width//2, height * 0.40), "联合报 & 科技新报", font=font_big, fill='black', anchor='mm')
+        draw.text((width//2, height * 0.55), datetime.datetime.now().strftime('%Y-%m-%d %H:%M'), font=font_small, fill='black', anchor='mm')
+
+        buf = BytesIO()
+        img.save(buf, format='PNG')
+        buf.seek(0)
+        return buf
+
+if __name__ == "__main__":
+    from calibre.web.feeds.recipes.utils import cli
+    cli(UdnNewsRecipe)
