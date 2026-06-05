@@ -24,26 +24,28 @@ def ensure_chinese_font():
         "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
         "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc"
     ]
-    
+
     for path in font_paths:
         if os.path.exists(path):
             return path
-            
+
     # 如果没找到，尝试安装
     print(">>> 未检测到中文字体，正在尝试安装...")
     try:
         subprocess.run(["sudo", "apt-get", "update"], check=True, capture_output=True)
         subprocess.run(["sudo", "apt-get", "install", "-y", "fonts-noto-cjk"], check=True, capture_output=True)
-        print(">>> 字体安装完成。")
-        # 再次检查安装后的路径
-        if os.path.exists(font_paths[0]):
-            return font_paths[0]
+        # 刷新字体缓存
+        subprocess.run(["fc-cache", "-f"], check=True, capture_output=True)
+
+        # 再次检查
+        for path in font_paths:
+            if os.path.exists(path):
+                return path
     except Exception as e:
-        print(f">>> 字体安装失败: {e}")
-        
+        print(f">>> 安装字体失败: {e}")
+
     return None
 
-FONT_PATH = ensure_chinese_font()
 
 class UdnNewsRecipe(BasicNewsRecipe):
     title = '联合新闻网 - ' + datetime.datetime.now().strftime('%Y-%m-%d %H:%M')
@@ -55,62 +57,30 @@ class UdnNewsRecipe(BasicNewsRecipe):
     remove_javascript = True
     compress_news_images = True
     scale_news_images_to = 600
-    
+
     keep_only_tags = [
         dict(name='h1'),
         dict(name='div', attrs={'class': re.compile(r'article-content|article_body|story-article|entry-content')}),
         dict(name='article'),
     ]
-    
+
     remove_tags = [
         dict(name='script'), dict(name='style'), dict(name='iframe'),
         dict(name='nav'), dict(name='header'), dict(name='footer'),
         dict(name='aside'),
         dict(name='div', attrs={'class': re.compile(r'ad|share|related|comment|sidebar|tags|meta', re.I)}),
     ]
-    
-    def get_cover_url(self):
-        """动态生成封面：标题 + 日期时间"""
-        now_dt = datetime.datetime.now()
-        date_str = now_dt.strftime('%Y年%m月%d日 %H:%M')
-        
-        width, height = 600, 800
-        img = Image.new('RGB', (width, height), color='white')
-        draw = ImageDraw.Draw(img)
-        
-        # 加载字体，如果系统无字体则使用默认（可能会显示方块，但不会报错）
-        try:
-            if FONT_PATH:
-                font_big = ImageFont.truetype(FONT_PATH, 70)
-                font_small = ImageFont.truetype(FONT_PATH, 40)
-            else:
-                font_big = ImageFont.load_default()
-                font_small = ImageFont.load_default()
-        except:
-            font_big = ImageFont.load_default()
-            font_small = ImageFont.load_default()
-        
-        # 绘制标题 "联合报"
-        draw.text((width//2, height * 0.40), "联合报", font=font_big, fill='black', anchor='mm')
-        
-        # 绘制日期时间
-        draw.text((width//2, height * 0.55), date_str, font=font_small, fill='black', anchor='mm')
-        
-        buf = BytesIO()
-        img.save(buf, format='PNG')
-        buf.seek(0)
-        return buf
 
     def parse_index(self):
         feeds = []
         sections = [('即时新闻', 'https://udn.com/news/breaknews/1/1')]
-        
+
         for section_name, section_url in sections:
             try:
                 soup = self.index_to_soup(section_url)
                 articles = []
                 seen_urls = set()
-                
+
                 for link in soup.find_all('a', href=re.compile(r'/news/story/')):
                     title = link.get_text(strip=True)
                     if title and len(title) > 5:
@@ -123,14 +93,14 @@ class UdnNewsRecipe(BasicNewsRecipe):
                         articles.append({'title': title, 'url': url, 'date': '', 'description': ''})
                     if len(articles) >= self.max_articles_per_feed:
                         break
-                
+
                 if articles:
                     feeds.append((section_name, articles))
             except Exception as e:
                 self.log.error(str(e))
-        
+
         return feeds
-    
+
     def preprocess_html(self, soup):
         for img in soup.find_all('img'):
             real_src = img.get('data-src') or img.get('data-original') or img.get('src', '')
@@ -143,7 +113,7 @@ class UdnNewsRecipe(BasicNewsRecipe):
         for tag in soup.find_all('div', class_=re.compile(r'ad|share|social', re.I)):
             tag.decompose()
         return soup
-    
+
     def postprocess_html(self, soup, first_fetch):
         if CAN_CONVERT:
             for element in soup.find_all(string=True):
@@ -157,6 +127,55 @@ class UdnNewsRecipe(BasicNewsRecipe):
                         except:
                             pass
         return soup
+
+    # --- 2. 动态生成封面 ---
+    def get_cover_url(self):
+        width, height = 600, 800
+        background_color = '#FFFFFF'
+        text_color = '#000000'
+
+        img = Image.new('RGB', (width, height), color=background_color)
+        draw = ImageDraw.Draw(img)
+
+        # 获取或安装字体
+        font_path = ensure_chinese_font()
+        font_large_size = 80
+        font_small_size = 40
+
+        try:
+            if font_path:
+                font_large = ImageFont.truetype(font_path, font_large_size)
+                font_small = ImageFont.truetype(font_path, font_small_size)
+            else:
+                # 如果实在找不到，回退到默认字体（虽然会乱码，但不会报错）
+                font_large = ImageFont.load_default()
+                font_small = ImageFont.load_default()
+        except IOError:
+            font_large = ImageFont.load_default()
+            font_small = ImageFont.load_default()
+
+        # 绘制标题 "联合报"
+        title_text = "联合报"
+        bbox = draw.textbbox((0, 0), title_text, font=font_large)
+        text_width = bbox[2] - bbox[0]
+        x = (width - text_width) / 2
+        y = height * 0.4
+        draw.text((x, y), title_text, fill=text_color, font=font_large)
+
+        # 绘制时间
+        now_str = datetime.datetime.now().strftime('%Y-%m-%d %H:%M')
+        bbox_time = draw.textbbox((0, 0), now_str, font=font_small)
+        time_width = bbox_time[2] - bbox_time[0]
+        x_time = (width - time_width) / 2
+        y_time = height * 0.6
+        draw.text((x_time, y_time), now_str, fill=text_color, font=font_small)
+
+        # 保存为临时文件
+        cover_path = os.path.join(os.getcwd(), 'cover.png')
+        img.save(cover_path)
+
+        return cover_path
+
 
 if __name__ == "__main__":
     from calibre.web.feeds.recipes.utils import cli
