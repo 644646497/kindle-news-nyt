@@ -1,0 +1,64 @@
+name: Daily TechNews to Kindle
+
+on:
+  schedule:
+    # 对应北京时间早上 07:00 (UTC 23:00 前一天)
+    # 对应北京时间晚上 19:00 (UTC 11:00)
+    - cron: '0 23 * * *'
+    - cron: '0 11 * * *'
+  workflow_dispatch: # 允许手动触发
+
+jobs:
+  send_technews:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Calibre and Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y calibre
+          pip install Pillow opencc-python-reimplemented
+
+      - name: Generate EPUB and Send via SMTP
+        env:
+          FROM: ${{ secrets.FROM }}
+          TO: ${{ secrets.TO }}
+          SMTP: ${{ secrets.SMTP }}
+          PORT: ${{ secrets.PORT }}
+          SECRET: ${{ secrets.SECRET }}
+        run: |
+          # 1. 使用 ebook-convert 生成电子书
+          # 注意：文件名使用小写以避免某些系统区分大小写的问题
+          ebook-convert technews.recipe technews.epub --output-profile kindle_pw4
+
+          # 2. 使用 Python 发送邮件
+          python3 -c "
+          import smtplib, os
+          from email.mime.multipart import MIMEMultipart
+          from email.mime.base import MIMEBase
+          from email import encoders
+          from datetime import datetime
+
+          # 创建邮件
+          msg = MIMEMultipart()
+          msg['From'] = os.environ['FROM']
+          msg['To'] = os.environ['TO']
+          msg['Subject'] = f'科技新报 {datetime.now().strftime('%Y-%m-%d')}'
+
+          # 读取生成的电子书文件
+          with open('technews.epub', 'rb') as f:
+              part = MIMEBase('application', 'epub+zip')
+              part.set_payload(f.read())
+              encoders.encode_base64(part)
+              part.add_header('Content-Disposition', 'attachment', filename='科技新报.epub')
+              msg.attach(part)
+
+          # 发送邮件
+          with smtplib.SMTP_SSL(os.environ['SMTP'], int(os.environ['PORT'])) as server:
+              server.login(os.environ['FROM'], os.environ['SECRET'])
+              server.send_message(msg)
+          print('发送完成：科技新报')
+          "
