@@ -135,7 +135,7 @@ class TechNewsRecipe(BasicNewsRecipe):
     # --- 2. 动态生成封面 ---
     def get_cover_url(self):
         width, height = 600, 800
-        background_color = '#F0F0F0'
+        background_color = '#FFFFFF'
         text_color = '#000000'
 
         img = Image.new('RGB', (width, height), color=background_color)
@@ -151,18 +151,32 @@ class TechNewsRecipe(BasicNewsRecipe):
                 font_large = ImageFont.truetype(font_path, font_large_size)
                 font_small = ImageFont.truetype(font_path, font_small_size)
             else:
-                # 如果找不到字体，使用默认字体（可能无法显示中文）
+                # 如果没有中文字体，使用默认字体（可能显示方块）
                 font_large = ImageFont.load_default()
                 font_small = ImageFont.load_default()
-        except:
-            font_large = ImageFont.load_default()
-            font_small = ImageFont.load_default()
 
-        # 绘制封面文字
-        draw.text((width//2, height * 0.4), "科技新报", font=font_large, fill=text_color, anchor='mm')
-        draw.text((width//2, height * 0.55), datetime.datetime.now().strftime('%Y-%m-%d %H:%M'), font=font_small, fill=text_color, anchor='mm')
+            # 绘制标题
+            title_text = "科技新报"
+            # 简单居中计算
+            title_w, title_h = draw.textsize(title_text, font=font_large)
+            draw.text(((width - title_w) / 2, (height - title_h) / 2 - 50),
+                      title_text, fill=text_color, font=font_large)
 
-        buf = BytesIO()
-        img.save(buf, format='JPEG')  # 使用 JPEG 格式以减小封面体积
-        buf.seek(0)
-        return buf
+            # 绘制日期
+            date_text = datetime.datetime.now().strftime('%Y-%m-%d')
+            date_w, date_h = draw.textsize(date_text, font=font_small)
+            draw.text(((width - date_w) / 2, (height - date_h) / 2 + 50),
+                      date_text, fill=text_color, font=font_small)
+
+        except Exception as e:
+            print(f"生成封面失败: {e}")
+
+        # 将图片保存到临时文件并返回路径
+        cover_path = os.path.join(os.getcwd(), 'technews_cover.jpg')
+        img.save(cover_path, 'JPEG')
+        return 'file://' + cover_path
+
+# 运行配方
+if __name__ == '__main__':
+    recipe = TechNewsRecipe()
+    print(recipe.title)
