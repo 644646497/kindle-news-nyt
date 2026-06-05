@@ -15,6 +15,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y calibre
+          pip install opencc-python-reimplemented   # ← 加上这一行
 
       - name: Generate and Send
         env:
