@@ -32,13 +32,14 @@ class UdnNewsRecipe(BasicNewsRecipe):
         dict(name='div', attrs={'class': re.compile(r'ad|share|related|comment|sidebar', re.I)}),
     ]
     
-    # 使用直接抓取网页的方式（因为 RSS 已失效）
     def parse_index(self):
         feeds = []
         sections = [
             ('即时新闻', 'https://udn.com/news/breaknews/1/1'),
             ('政治', 'https://udn.com/news/rank/political'),
             ('财经', 'https://udn.com/news/rank/finance'),
+            ('科技', 'https://udn.com/news/rank/tech'),
+            ('国际', 'https://udn.com/news/rank/world'),
         ]
         
         for section_name, section_url in sections:
@@ -47,14 +48,19 @@ class UdnNewsRecipe(BasicNewsRecipe):
                 soup = self.index_to_soup(section_url)
                 articles = []
                 
-                # 提取文章链接
                 for link in soup.find_all('a', href=re.compile(r'/news/story/')):
                     title = link.get_text(strip=True)
                     if title and len(title) > 5:
                         url = link.get('href')
                         if url.startswith('/'):
                             url = 'https://udn.com' + url
-                        articles.append((section_name, title, url, '', ''))
+                        # 🔧 修复：使用字典而不是元组
+                        articles.append({
+                            'title': title,
+                            'url': url,
+                            'date': '',
+                            'description': ''
+                        })
                     if len(articles) >= self.max_articles_per_feed:
                         break
                 
@@ -71,7 +77,6 @@ class UdnNewsRecipe(BasicNewsRecipe):
             tag.decompose()
         return soup
 
-# 重要：这个必须放在文件末尾
 if __name__ == "__main__":
     from calibre.web.feeds.recipes.utils import cli
     cli(UdnNewsRecipe)
