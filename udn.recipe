@@ -5,6 +5,7 @@ import re
 import datetime
 import time
 import os
+import subprocess
 from io import BytesIO
 from PIL import Image, ImageDraw, ImageFont
 from calibre.web.feeds.news import BasicNewsRecipe
@@ -16,8 +17,35 @@ try:
 except ImportError:
     CAN_CONVERT = False
 
+# --- 1. 环境初始化：自动安装中文字体 (解决方块问题) ---
+def ensure_chinese_font():
+    # 常见的 Noto Sans CJK 字体路径
+    font_paths = [
+        "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
+        "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc"
+    ]
+    
+    for path in font_paths:
+        if os.path.exists(path):
+            return path
+            
+    # 如果没找到，尝试安装
+    print(">>> 未检测到中文字体，正在尝试安装...")
+    try:
+        subprocess.run(["sudo", "apt-get", "update"], check=True, capture_output=True)
+        subprocess.run(["sudo", "apt-get", "install", "-y", "fonts-noto-cjk"], check=True, capture_output=True)
+        print(">>> 字体安装完成。")
+        # 再次检查安装后的路径
+        if os.path.exists(font_paths[0]):
+            return font_paths[0]
+    except Exception as e:
+        print(f">>> 字体安装失败: {e}")
+        
+    return None
+
+FONT_PATH = ensure_chinese_font()
+
 class UdnNewsRecipe(BasicNewsRecipe):
-    # 1. 设置基础信息，移除 cover_url
     title = '联合新闻网 - ' + datetime.datetime.now().strftime('%Y-%m-%d %H:%M')
     language = 'zh-CN'
     oldest_article = 1
@@ -27,9 +55,6 @@ class UdnNewsRecipe(BasicNewsRecipe):
     remove_javascript = True
     compress_news_images = True
     scale_news_images_to = 600
-    
-    # 2. 移除原有的 cover_url，改用动态生成封面
-    # cover_url = 'https://udn.com/favicon.ico' # 注释掉这一行
     
     keep_only_tags = [
         dict(name='h1'),
@@ -45,42 +70,32 @@ class UdnNewsRecipe(BasicNewsRecipe):
     ]
     
     def get_cover_url(self):
-        """
-        动态生成封面图片
-        显示：联合报 + 当前日期时间
-        """
-        # 获取当前时间
+        """动态生成封面：标题 + 日期时间"""
         now_dt = datetime.datetime.now()
         date_str = now_dt.strftime('%Y年%m月%d日 %H:%M')
         
-        # 创建白色背景图片 (Kindle 封面常见比例)
         width, height = 600, 800
         img = Image.new('RGB', (width, height), color='white')
         draw = ImageDraw.Draw(img)
         
-        # 尝试加载中文字体 (针对服务器环境或本地环境)
-        font_path = "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc"
+        # 加载字体，如果系统无字体则使用默认（可能会显示方块，但不会报错）
         try:
-            if os.path.exists(font_path):
-                font_big = ImageFont.truetype(font_path, 70)
-                font_small = ImageFont.truetype(font_path, 40)
+            if FONT_PATH:
+                font_big = ImageFont.truetype(FONT_PATH, 70)
+                font_small = ImageFont.truetype(FONT_PATH, 40)
             else:
-                # 如果指定路径字体不存在，尝试使用默认字体 (可能显示不了中文，但不会报错)
                 font_big = ImageFont.load_default()
                 font_small = ImageFont.load_default()
-        except Exception as e:
-            print("字体加载失败:", e)
+        except:
             font_big = ImageFont.load_default()
             font_small = ImageFont.load_default()
-
-        # 绘制文本
-        # 居中绘制主标题 "联合报"
-        draw.text((width//2, height * 0.35), "联合报", font=font_big, fill='black', anchor='mm')
         
-        # 居中绘制副标题 (日期时间)
-        draw.text((width//2, height * 0.50), date_str, font=font_small, fill='black', anchor='mm')
-
-        # 将图片转换为字节流返回
+        # 绘制标题 "联合报"
+        draw.text((width//2, height * 0.40), "联合报", font=font_big, fill='black', anchor='mm')
+        
+        # 绘制日期时间
+        draw.text((width//2, height * 0.55), date_str, font=font_small, fill='black', anchor='mm')
+        
         buf = BytesIO()
         img.save(buf, format='PNG')
         buf.seek(0)
