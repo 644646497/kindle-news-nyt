@@ -14,78 +14,95 @@ except ImportError:
 os.environ['TZ'] = 'Asia/Shanghai'
 time.tzset()
 
-# 注意：类定义必须顶格
 class AdvancedUserRecipeTechNews(BasicNewsRecipe):
     title = datetime.datetime.now().strftime('科技新报(简体版) - %Y-%m-%d')
     language = 'zh_CN'
-    oldest_article = 1
-    max_articles_per_feed = 15
+    oldest_article = 1  # 只抓当天的
+    max_articles_per_feed = 20  # 稍微多抓一点，给过滤留余地
     auto_cleanup = True
     auto_cleanup_keep = '//h1|//div[@class="entry-content"]'
 
+    # 核心保留标签
     keep_only_tags = [
         dict(name='h1'),
         dict(name='div', attrs={'class': 'entry-content'})
     ]
 
+    # 基础移除标签
     remove_tags = [
-        dict(name='hr'), dict(name='script'), dict(name='style'),
-        dict(name='aside'), dict(name='footer'), dict(name='nav'),
-        dict(name='header'), dict(name='form'), dict(name='iframe'),
+        dict(name='hr'),
+        dict(name='script'),
+        dict(name='style'),
+        dict(name='aside'),
+        dict(name='footer'),
+        dict(name='nav'),
+        dict(name='header'),
+        dict(name='form'),
+        dict(name='iframe'),
         dict(name='div', attrs={'class': re.compile(r'tag|sidebar|ad|related|share|entry-meta|author-box')}),
     ]
 
-    # 【关键修复点】：确保 def 前面有且只有 4 个空格，不要多也不要少
     def filter_articles(self, articles, log):
         """
-        过滤文章：只保留符合“首页”调性的文章，剔除纯财报快讯
+        强力过滤：剔除所有看起来像“财报快讯”的文章
         """
         filtered = []
+        # 定义财报类文章的“黑名单”关键词
+        financial_keywords = ['營收', '营收', '月增', '月減', '年增', '月减', '年減', '財報', 'EPS', '毛利率']
+
         for article in articles:
-            title = article.get('title', '').lower()
+            title = article.get('title', '')
             url = article.get('url', '').lower()
 
-            # 1. 排除财经子域名的文章
-            if 'finance.technews.tw' in url:
-                continue
+            # 1. 检查标题是否包含财报关键词
+            is_financial = any(keyword in title for keyword in financial_keywords)
 
-            # 2. 排除典型的“财报快讯”标题特征
-            if any(keyword in title for keyword in ['營收', '財報', '月增', '年增']):
-                if len(title) < 15:
-                    continue
+            # 2. 检查 URL 是否属于 finance 子域名 (双重保险)
+            is_finance_domain = 'finance.technews.tw' in url
 
-            filtered.append(article)
+            if not is_financial and not is_finance_domain:
+                filtered.append(article)
+            else:
+                log.debug(f"已过滤财报文章: {title}")
 
         return filtered
 
     def preprocess_html(self, soup):
-        # ... 你的 preprocess_html 代码保持不变 ...
+        """预处理 HTML"""
+        # 清理底部版权信息
         for tag in soup.find_all(text=re.compile(r'This article was downloaded by calibre')):
             parent = tag.parent
             if parent:
                 parent.decompose()
+
+        # 清理赞助相关内容
         for tag in soup.find_all(string=re.compile(r'喝咖啡|贊助|Support us')):
             p = tag.find_parent(['div', 'p', 'section'])
             if p:
                 p.decompose()
+
+        # 清理特定链接
         for a in soup.find_all('a', href=re.compile(r'technews\.tw/$|buycoffee')):
             a.decompose()
+
+        # 清理特定图片
         for img in soup.find_all('img', src=re.compile(r'coffee|donate')):
             img.decompose()
+
         return soup
 
     def postprocess_html(self, soup, first_fetch):
-        # ... 你的 postprocess_html 代码保持不变 ...
+        """后处理：繁体转简体"""
         if not CAN_CONVERT:
             return soup
+
         for element in soup.find_all(string=True):
             original_text = str(element)
             converted_text = cc.convert(original_text)
             if converted_text != original_text:
                 element.replace_with(converted_text)
+
         return soup
 
-    # 【关键修复点】：feeds 也必须缩进 4 个空格，属于类的一部分
-    feeds = [
-        ('科技新报 - 首页精选', 'https://technews.tw/feed/'),
-    ]
+    # 使用主站 Feed，依靠 filter_articles 进行清洗
+    feeds = [('科技新报全站', 'https://technews.tw/feed')]
