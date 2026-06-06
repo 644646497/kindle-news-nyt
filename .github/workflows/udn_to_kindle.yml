@@ -1,8 +1,8 @@
-name: Send UDN News to Kindle
+name: Send TechNews to Kindle
 
 on:
   schedule:
-    - cron: '0 22 * * *'
+    - cron: '0 12 * * *'
   workflow_dispatch:
 
 jobs:
@@ -15,7 +15,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y calibre
-          pip install opencc-python-reimplemented   # ← 加上这一行
+          pip install opencc-python-reimplemented
 
       - name: Generate and Send
         env:
@@ -25,7 +25,7 @@ jobs:
           PORT: ${{ secrets.PORT }}
           SECRET: ${{ secrets.SECRET }}
         run: |
-          ebook-convert udn.recipe udn_news.epub --output-profile kindle
+          ebook-convert technews.recipe technews_news.epub --output-profile kindle
 
           python3 -c '
           import smtplib, os
@@ -37,13 +37,13 @@ jobs:
           msg = MIMEMultipart()
           msg["From"] = os.environ["FROM"]
           msg["To"] = os.environ["TO"]
-          msg["Subject"] = f"联合新闻网 {datetime.now().strftime("%Y-%m-%d")}"
+          msg["Subject"] = f"科技新报 {datetime.now().strftime("%Y-%m-%d")}"
 
-          with open("udn_news.epub", "rb") as f:
+          with open("technews_news.epub", "rb") as f:
               part = MIMEBase("application", "epub+zip")
               part.set_payload(f.read())
               encoders.encode_base64(part)
-              part.add_header("Content-Disposition", "attachment", filename="联合新闻网.epub")
+              part.add_header("Content-Disposition", "attachment", filename="科技新报.epub")
               msg.attach(part)
 
           with smtplib.SMTP_SSL(os.environ["SMTP"], int(os.environ["PORT"])) as server:
