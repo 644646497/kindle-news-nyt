@@ -7,102 +7,107 @@ import time
 import os
 import subprocess
 from io import BytesIO
-from PIL import Image, ImageDraw, ImageFont
 from calibre.web.feeds.news import BasicNewsRecipe
 
+# --- 尝试导入 OpenCC 进行简繁转换 ---
 try:
     from opencc import OpenCC
-    cc = OpenCC('t2s')
+    cc = OpenCC('t2s') # t2s 表示 Traditional to Simplified
     CAN_CONVERT = True
 except ImportError:
     CAN_CONVERT = False
+    print("警告: 未找到 opencc-python-reimplemented，将无法自动转换简体字。")
 
-# --- 1. 环境初始化：自动安装中文字体 (解决方块问题) ---
+# --- 环境初始化：确保有中文字体 ---
 def ensure_chinese_font():
     font_paths = [
         "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
-        "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc"
+        "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+        "/usr/share/fonts/truetype/droid/DroidSansFallbackFull.ttf"
     ]
-    for path in font_paths:
-        if os.path.exists(path):
-            return path
-    print(">>> 未检测到中文字体，正在尝试安装...")
-    try:
-        subprocess.run(["sudo", "apt-get", "update"], check=True, capture_output=True)
-        subprocess.run(["sudo", "apt-get", "install", "-y", "fonts-noto-cjk"], check=True, capture_output=True)
-        subprocess.run(["fc-cache", "-f"], check=True, capture_output=True)
-        for path in font_paths:
-            if os.path.exists(path):
-                return path
-    except Exception as e:
-        print(f">>> 安装字体失败: {e}")
-    return None
+    if not any(os.path.exists(p) for p in font_paths):
+        print("正在安装中文字体...")
+        os.system("apt-get update && apt-get install -y fonts-noto-cjk || true")
 
+ensure_chinese_font()
 
 class TechNewsRecipe(BasicNewsRecipe):
-    title = '科技新报 - ' + datetime.datetime.now().strftime('%Y-%m-%d %H:%M')
-    language = 'zh-CN'
-    oldest_article = 2
-    max_articles_per_feed = 20
-    auto_cleanup = True
-    no_stylesheets = False
-    remove_javascript = True
-    compress_news_images = True
-    scale_news_images_to = 600
+    title                  = '科技新报'
+    description            = 'TechNews 科技新報每日精选'
+    publisher              = 'TechNews'
+    category               = 'Technology, Taiwan'
+    language               = 'zh-CN' # 强制标记为中文
+    oldest_article         = 2       # 抓取最近2天的文章
+    max_articles_per_feed  = 20      # 每个分类最多抓取20篇
+    no_stylesheets         = True    # 移除网站原始样式，使用Kindle默认排版
+    use_embedded_content   = False
+    remove_javascript      = True    # 移除JS，加快加载并减少干扰
+    keep_only_tags         = [dict(name='div', attrs={'class': 'single-content'})] # 【关键】只保留正文区域
 
-    # 强制使用 RSS 源，或者抓取具体的频道页，避开无法解析的 JS 首页
+    # 定义要抓取的分类链接 (绕过首页JS加载问题)
     feeds = [
-        ('最新文章', 'https://technews.tw/feed/'),
-        ('人工智能', 'https://technews.tw/category/ai/feed/'),
-        ('智能手机', 'https://technews.tw/category/smartphone/feed/'),
+        ('最新要闻', 'https://technews.tw/category/technews/'),
+        ('半导体', 'https://technews.tw/category/semiconductor/'),
+        ('人工智能', 'https://technews.tw/category/ai/'),
+        ('区块链', 'https://technews.tw/category/blockchain/'),
+        ('电动车', 'https://technews.tw/category/ev/'),
     ]
 
-    keep_only_tags = [
-        dict(name='h1'),
-        dict(name='div', attrs={'class': re.compile(r'article-content|entry-content|post-body|single-post-content', re.I)}),
-        dict(name='article'),
-    ]
-
-    remove_tags = [
-        dict(name='script'), dict(name='style'), dict(name='iframe'),
-        dict(name='nav'), dict(name='header'), dict(name='footer'),
-        dict(name='aside'),
-        dict(name='div', attrs={'class': re.compile(r'ad|share|related|comment|sidebar|tags|meta|social|paywall', re.I)}),
-    ]
-
-    # --- 封面生成 (保持不变) ---
+    # --- 1. 自定义封面生成 (带日期) ---
     def get_cover_url(self):
-        width, height = 600, 800
-        background_color = '#FFFFFF'
-        text_color = '#000000'
+        return None # 禁用网络封面，使用本地生成
 
-        img = Image.new('RGB', (width, height), color=background_color)
-        draw = ImageDraw.Draw(img)
+    def get_masthead_title(self):
+        # 获取当前时间
+        now = datetime.datetime.now()
+        date_str = now.strftime("%Y-%m-%d %H:%M")
+        # 返回纯中文标题 + 时间
+        return f"科技新报 {date_str}"
 
-        font_path = ensure_chinese_font()
-        font_large_size = 80
-        font_small_size = 40
+    # --- 2. 预处理：简繁转换 ---
+    def preprocess_html(self, soup):
+        if CAN_CONVERT:
+            # 遍历所有文本节点进行转换
+            for element in soup.find_all(string=True):
+                if element.strip():
+                    try:
+                        new_text = cc.convert(element)
+                        element.replace_with(new_text)
+                    except:
+                        pass
+        return soup
 
-        try:
-            if font_path:
-                font_large = ImageFont.truetype(font_path, font_large_size)
-                font_small = ImageFont.truetype(font_path, font_small_size)
+    # --- 3. 后处理：强力清洗尾部垃圾信息 ---
+    def postprocess_html(self, soup, first_fetch):
+        # 删除 "延伸阅读" 及其列表
+        # 匹配包含 "延伸閱讀" 文字的标签（通常是 h2, h3 或 strong）
+        related_headers = soup.find_all(text=re.compile(r"延伸閱讀"))
+        for header in related_headers:
+            tag = header.parent
+            # 删除该标题以及紧随其后的 ul/li 列表
+            if tag:
+                next_tag = tag.find_next_sibling()
+                if next_tag and next_tag.name in ['ul', 'div']:
+                    next_tag.decompose()
+                tag.decompose()
+
+        # 删除 "想請我們喝幾杯咖啡" / "每杯咖啡" / 打赏模块
+        # 匹配包含 "咖啡" 或 "贊助" 的 div
+        donation_blocks = soup.find_all(text=re.compile(r"(想請我們喝幾杯咖啡|每杯咖啡|贊助我們)"))
+        for block_text in donation_blocks:
+            # 向上查找容器 div 并删除
+            container = block_text.parent
+            while container and container.name != 'div' and container.name != 'body':
+                container = container.parent
+            if container and container.name == 'div':
+                container.decompose()
             else:
-                font_large = ImageFont.load_default()
-                font_small = ImageFont.load_default()
-        except:
-            font_large = ImageFont.load_default()
-            font_small = ImageFont.load_default()
+                # 如果没找到父级div，直接删掉这个文本所在的段落
+                block_text.parent.decompose()
 
-        draw.text((width//2, height * 0.40), "科技新报 TechNews", font=font_large, fill=text_color, anchor='mm')
-        draw.text((width//2, height * 0.55), datetime.datetime.now().strftime('%Y-%m-%d %H:%M'), font=font_small, fill=text_color, anchor='mm')
+        # 删除底部的版权声明/来源 (可选，如果觉得碍眼)
+        # source_tags = soup.find_all(text=re.compile(r"(圖片來源|本文由.*授權轉載)"))
+        # for s in source_tags:
+        #     s.parent.decompose()
 
-        buf = BytesIO()
-        img.save(buf, format='JPEG')
-        buf.seek(0)
-        return buf
-
-# --- 以下方法被注释掉，因为我们改用 feeds 列表，不再解析首页 HTML ---
-# def parse_index(self): ...
-# def preprocess_html(self, soup): ...
-# def postprocess_html(self, soup, first_fetch): ...
+        return soup
