@@ -149,3 +149,4 @@ class TechNewsRecipe(BasicNewsRecipe):
                 font_small = ImageFont.truetype(font_path, font_small_size)
             else:
                 # 降级：用默认字体画英文
+          
