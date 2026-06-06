@@ -2,7 +2,7 @@ name: Send TechNews to Kindle
 
 on:
   schedule:
-    - cron: '0 22 * * *'
+    - cron: '0 12 * * *'
   workflow_dispatch:
 
 jobs:
