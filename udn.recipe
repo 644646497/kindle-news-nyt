@@ -17,33 +17,25 @@ try:
 except ImportError:
     CAN_CONVERT = False
 
-# --- 1. 环境初始化：自动安装中文字体 (解决方块问题) ---
+# --- 环境初始化：自动安装中文字体 ---
 def ensure_chinese_font():
-    # 常见的 Noto Sans CJK 字体路径
     font_paths = [
         "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
         "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc"
     ]
-
     for path in font_paths:
         if os.path.exists(path):
             return path
-
-    # 如果没找到，尝试安装
     print(">>> 未检测到中文字体，正在尝试安装...")
     try:
         subprocess.run(["sudo", "apt-get", "update"], check=True, capture_output=True)
         subprocess.run(["sudo", "apt-get", "install", "-y", "fonts-noto-cjk"], check=True, capture_output=True)
-        # 刷新字体缓存
-        subprocess.run(["fc-cache", "-f"], check=True, capture_output=True)
-
-        # 再次检查
+        subprocess.run(["sudo", "fc-cache", "-f"], check=True, capture_output=True)
         for path in font_paths:
             if os.path.exists(path):
                 return path
     except Exception as e:
         print(f">>> 安装字体失败: {e}")
-
     return None
 
 
@@ -128,7 +120,6 @@ class UdnNewsRecipe(BasicNewsRecipe):
                             pass
         return soup
 
-    # --- 2. 动态生成封面 ---
     def get_cover_url(self):
         width, height = 600, 800
         background_color = '#FFFFFF'
@@ -137,7 +128,6 @@ class UdnNewsRecipe(BasicNewsRecipe):
         img = Image.new('RGB', (width, height), color=background_color)
         draw = ImageDraw.Draw(img)
 
-        # 获取或安装字体
         font_path = ensure_chinese_font()
         font_large_size = 80
         font_small_size = 40
@@ -147,35 +137,25 @@ class UdnNewsRecipe(BasicNewsRecipe):
                 font_large = ImageFont.truetype(font_path, font_large_size)
                 font_small = ImageFont.truetype(font_path, font_small_size)
             else:
-                # 如果实在找不到，回退到默认字体（虽然会乱码，但不会报错）
                 font_large = ImageFont.load_default()
                 font_small = ImageFont.load_default()
-        except IOError:
+                draw.text((width//2, height*0.35), "UDN News", font=font_large, fill=text_color, anchor='mm')
+                draw.text((width//2, height*0.55), datetime.datetime.now().strftime('%Y-%m-%d %H:%M'), font=font_small, fill=text_color, anchor='mm')
+                buf = BytesIO()
+                img.save(buf, format='PNG')
+                buf.seek(0)
+                return buf
+        except:
             font_large = ImageFont.load_default()
             font_small = ImageFont.load_default()
 
-        # 绘制标题 "联合报"
-        title_text = "联合报"
-        bbox = draw.textbbox((0, 0), title_text, font=font_large)
-        text_width = bbox[2] - bbox[0]
-        x = (width - text_width) / 2
-        y = height * 0.4
-        draw.text((x, y), title_text, fill=text_color, font=font_large)
+        draw.text((width//2, height*0.35), "联合新闻网", font=font_large, fill=text_color, anchor='mm')
+        draw.text((width//2, height*0.55), datetime.datetime.now().strftime('%Y-%m-%d %H:%M'), font=font_small, fill=text_color, anchor='mm')
 
-        # 绘制时间
-        now_str = datetime.datetime.now().strftime('%Y-%m-%d %H:%M')
-        bbox_time = draw.textbbox((0, 0), now_str, font=font_small)
-        time_width = bbox_time[2] - bbox_time[0]
-        x_time = (width - time_width) / 2
-        y_time = height * 0.6
-        draw.text((x_time, y_time), now_str, fill=text_color, font=font_small)
-
-        # 保存为临时文件
-        cover_path = os.path.join(os.getcwd(), 'cover.png')
-        img.save(cover_path)
-
-        return cover_path
-
+        buf = BytesIO()
+        img.save(buf, format='PNG')
+        buf.seek(0)
+        return buf
 
 if __name__ == "__main__":
     from calibre.web.feeds.recipes.utils import cli
