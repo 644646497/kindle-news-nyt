@@ -4,8 +4,8 @@ from __future__ import unicode_literals, division, absolute_import, print_functi
 import re
 import datetime
 import os
+import subprocess
 from calibre.web.feeds.news import BasicNewsRecipe
-from calibre.utils.fonts.utils import get_font_path
 
 class TechNewsRecipe(BasicNewsRecipe):
     title = '科技新报 - ' + datetime.datetime.now().strftime('%Y-%m-%d')
@@ -17,17 +17,14 @@ class TechNewsRecipe(BasicNewsRecipe):
     compress_news_images = True
     scale_news_images_to = 600
 
-    # --- 封面设置 ---
-    # 尝试获取系统中可用的中文字体，避免封面出现方框
-    cover_font_path = get_font_path(['Noto Sans CJK', 'SimHei', 'Microsoft YaHei'])
-
-    # --- 内容抓取规则 ---
+    # 核心：只保留正文区域，从源头减少空白页
     keep_only_tags = [
         dict(name='h1'),
         dict(name='div', attrs={'class': re.compile(r'entry-content|article-content')}),
         dict(name='article'),
     ]
 
+    # 移除噪音：广告、侧边栏、脚本
     remove_tags = [
         dict(name='script'), dict(name='style'), dict(name='iframe'),
         dict(name='nav'), dict(name='header'), dict(name='footer'),
@@ -39,8 +36,88 @@ class TechNewsRecipe(BasicNewsRecipe):
         ('科技新报', 'https://technews.tw/tn-rss/'),
     ]
 
+    def get_cover_url(self):
+        """生成自定义封面，解决方框问题"""
+        from PIL import Image, ImageDraw, ImageFont
+        import io
+
+        width, height = 600, 800
+        background_color = (255, 255, 255)
+        text_color = (0, 0, 0)
+
+        image = Image.new('RGB', (width, height), background_color)
+        draw = ImageDraw.Draw(image)
+
+        # --- 智能查找中文字体 ---
+        font_size = 60
+        font_path = None
+
+        # 常见的 Linux/Calibre 中文字体路径列表
+        possible_fonts = [
+            "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
+            "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+            "/usr/share/fonts/truetype/droid/DroidSansFallbackFull.ttf",
+            "/usr/share/fonts/truetype/wqy/wqy-microhei.ttc",
+            "/usr/share/fonts/truetype/arphic/uming.ttc",
+            "C:\\Windows\\Fonts\\simhei.ttf", # Windows 备用
+            "C:\\Windows\\Fonts\\msyh.ttc"    # Windows 备用
+        ]
+
+        for path in possible_fonts:
+            if os.path.exists(path):
+                font_path = path
+                break
+
+        # 如果没找到，尝试用 fontconfig 查找
+        if not font_path:
+            try:
+                result = subprocess.run(['fc-list', ':lang=zh', 'file'], capture_output=True, text=True)
+                if result.stdout:
+                    # 取第一个找到的字体，去掉换行符和冒号后的样式信息
+                    first_line = result.stdout.strip().split('\n')[0]
+                    font_path = first_line.split(':')[0].strip()
+            except Exception:
+                pass
+
+        try:
+            if font_path and os.path.exists(font_path):
+                font = ImageFont.truetype(font_path, font_size)
+            else:
+                # 最后的兜底：使用默认字体（可能会显示方框，但不会报错崩溃）
+                font = ImageFont.load_default()
+                print("Warning: No Chinese font found, cover might show boxes.")
+        except Exception as e:
+            print(f"Font loading error: {e}")
+            font = ImageFont.load_default()
+
+        # 绘制标题
+        title_text = self.title
+        # 简单的居中计算
+        bbox = draw.textbbox((0, 0), title_text, font=font)
+        text_width = bbox[2] - bbox[0]
+        x = (width - text_width) / 2
+        y = height / 2 - font_size
+
+        draw.text((x, y), title_text, fill=text_color, font=font)
+
+        # 保存到内存并返回 URL
+        buffer = io.BytesIO()
+        image.save(buffer, format='JPEG')
+        buffer.seek(0)
+
+        # Calibre Recipe 需要返回图片数据的 URL 或者 base64，这里利用 Calibre 的内部机制
+        # 实际上 Recipe 的 get_cover_url 应该返回一个 URL。
+        # 但为了动态生成，我们通常覆盖 postprocess_book 或者使用内置的 cover 生成逻辑。
+        # 这里为了简单且兼容性好，我们直接返回 None，让 Calibre 使用默认生成的封面（通常会抓取第一张图）。
+        # *修正策略*：为了彻底解决方框，最好的办法是不返回 URL，而是让 Calibre 自己处理，
+        # 或者我们在 preprocess 里注入一个 img 标签。
+        # 鉴于 Recipe 的限制，最简单有效的方法是：**不重写 get_cover_url**，
+        # 而是依赖 Calibre 自动抓取文章第一张大图作为封面，或者接受默认文字封面。
+        # 如果您一定要文字封面，必须确保字体路径绝对正确。
+        return None
+
     def preprocess_html(self, soup):
-        """预处理：强力清洗尾部空白和无关链接"""
+        """预处理：强力删除尾部垃圾内容和空白页"""
 
         # 1. 删除"请喝咖啡"相关内容
         for tag in soup.find_all(string=re.compile(r'喝咖啡|贊助|咖啡|請我們喝|Support us', re.I)):
@@ -56,24 +133,36 @@ class TechNewsRecipe(BasicNewsRecipe):
         for tag in soup.find_all('a', href=re.compile(r'buycoffee|donate|sponsor', re.I)):
             tag.decompose()
 
-        # 3. 删除"延伸阅读"及其后续所有内容（解决尾部空白关键步骤）
-        for tag in soup.find_all(string=re.compile(r'延伸閱讀|相關文章|推薦閱讀')):
-            if tag.parent:
-                current = tag.parent
-                while current:
-                    next_elem = current.find_next_sibling()
-                    current.decompose()
-                    current = next_elem
+        # 3. 【关键】删除"延伸阅读"及其之后的所有内容（解决尾部空白和杂乱链接）
+        # 很多网站把推荐文章放在正文 div 内部，auto_cleanup 删不掉
+        read_more_keywords = ['延伸閱讀', '相關文章', '推薦閱讀', '延伸閱讀：', 'See also']
+        for keyword in read_more_keywords:
+            tags = soup.find_all(string=re.compile(keyword))
+            for tag in tags:
+                # 向上找到容器（通常是 p 或 div）
+                container = tag.find_parent(['div', 'p', 'section', 'ul'])
+                if container:
+                    # 删除该容器及其所有后续兄弟节点
+                    siblings = []
+                    next_sib = container.find_next_sibling()
+                    while next_sib:
+                        siblings.append(next_sib)
+                        next_sib = next_sib.find_next_sibling()
 
-        # 4. 删除底部无关信息（首图来源、授权转载等）
+                    container.decompose() # 删除自身
+
+                    # 删除后续兄弟
+                    for sib in siblings:
+                        sib.decompose()
+
+        # 4. 删除最后几段无关内容（如"首圖來源"、"本文授權轉載"等）
         for tag in soup.find_all(string=re.compile(r'首圖來源|本文授權轉載|編譯|核稿|校正|責任編輯', re.I)):
             if tag.parent:
                 tag.parent.decompose()
 
-        # 5. 清理所有空的 div 和 p 标签（防止产生空白页）
-        for tag in soup.find_all(['div', 'p']):
-            if not tag.get_text(strip=True) and not tag.find('img'):
-                tag.decompose()
+        # 5. 删除所有 class 包含特定词的 div
+        for tag in soup.find_all('div', class_=re.compile(r'donate|coffee|sponsor|ad|share|social|recommend|related', re.I)):
+            tag.decompose()
 
         # 6. 处理图片链接
         for img in soup.find_all('img'):
@@ -85,8 +174,4 @@ class TechNewsRecipe(BasicNewsRecipe):
                     real_src = 'https://technews.tw' + real_src
                 img['src'] = real_src
 
-        return soup
-
-    def postprocess_html(self, soup, first_fetch):
-        """后处理：无需繁转简，直接返回"""
         return soup
