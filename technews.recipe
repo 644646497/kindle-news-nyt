@@ -74,18 +74,18 @@ class TechNewsRecipe(BasicNewsRecipe):
 
     def preprocess_html(self, soup):
         """预处理：删除广告和赞助内容"""
-        
+
         # 删除"请喝咖啡"相关内容
         for tag in soup.find_all(string=re.compile(r'喝咖啡|贊助|咖啡|請我們喝|Support us|想請我們喝', re.I)):
             if tag.parent:
                 parent = tag.find_parent(['div', 'p', 'section'])
                 if parent:
                     parent.decompose()
-        
+
         # 删除赞助相关链接
         for tag in soup.find_all('a', href=re.compile(r'buycoffee|donate|sponsor', re.I)):
             tag.decompose()
-        
+
         # 删除"延伸阅读"后面的内容
         for tag in soup.find_all(string=re.compile(r'延伸閱讀|相關文章|推薦閱讀', re.I)):
             if tag.parent:
@@ -94,7 +94,7 @@ class TechNewsRecipe(BasicNewsRecipe):
                     next_elem = current.find_next_sibling()
                     current.decompose()
                     current = next_elem
-        
+
         # 处理图片
         for img in soup.find_all('img'):
             real_src = img.get('data-src') or img.get('data-original') or img.get('src', '')
@@ -104,11 +104,11 @@ class TechNewsRecipe(BasicNewsRecipe):
                 elif real_src.startswith('/'):
                     real_src = 'https://technews.tw' + real_src
                 img['src'] = real_src
-        
+
         # 删除广告div
         for tag in soup.find_all('div', class_=re.compile(r'ad|share|social|donate|coffee', re.I)):
             tag.decompose()
-        
+
         return soup
 
     def postprocess_html(self, soup, first_fetch):
@@ -148,5 +148,29 @@ class TechNewsRecipe(BasicNewsRecipe):
                 font_large = ImageFont.truetype(font_path, font_large_size)
                 font_small = ImageFont.truetype(font_path, font_small_size)
             else:
-                # 降级：用默认字体画英文
-          
+                # 降级方案：使用默认字体，防止报错
+                font_large = ImageFont.load_default()
+                font_small = ImageFont.load_default()
+
+            # 绘制标题
+            title_text = "科技新报"
+            bbox = draw.textbbox((0, 0), title_text, font=font_large)
+            text_width = bbox[2] - bbox[0]
+            x = (width - text_width) / 2
+            y = 200
+            draw.text((x, y), title_text, fill=text_color, font=font_large)
+
+            # 绘制日期
+            bbox_date = draw.textbbox((0, 0), date_str, font=font_small)
+            text_width_date = bbox_date[2] - bbox_date[0]
+            x_date = (width - text_width_date) / 2
+            y_date = 350
+            draw.text((x_date, y_date), date_str, fill=text_color, font=font_small)
+
+        except Exception as e:
+            print(f">>> 生成封面失败: {e}")
+
+        # 保存图片到临时文件并返回路径
+        cover_path = os.path.join(os.getcwd(), 'cover.png')
+        img.save(cover_path)
+        return cover_path
