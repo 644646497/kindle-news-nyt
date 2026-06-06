@@ -4,112 +4,78 @@ from __future__ import unicode_literals, division, absolute_import, print_functi
 import re
 import datetime
 import os
-import sys
-import subprocess
-from io import BytesIO
-from PIL import Image, ImageDraw, ImageFont
 from calibre.web.feeds.news import BasicNewsRecipe
-
-# --- 强制安装中文字体 ---
-def install_chinese_font():
-    font_path = "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc"
-    if os.path.exists(font_path):
-        return font_path
-    
-    print(">>> 正在安装中文字体...")
-    try:
-        subprocess.run(["sudo", "apt-get", "update"], check=True, capture_output=True)
-        subprocess.run(["sudo", "apt-get", "install", "-y", "fonts-noto-cjk"], check=True, capture_output=True)
-        subprocess.run(["sudo", "fc-cache", "-f"], check=True, capture_output=True)
-        
-        if os.path.exists(font_path):
-            print(">>> 字体安装成功")
-            return font_path
-    except Exception as e:
-        print(f">>> 字体安装失败: {e}")
-    
-    return None
-
-FONT_PATH = install_chinese_font()
-
-# --- 繁转简 ---
-try:
-    from opencc import OpenCC
-    cc = OpenCC('t2s')
-    CAN_CONVERT = True
-    print("✅ opencc 加载成功")
-except ImportError:
-    print("⚠️ opencc 未安装")
-    CAN_CONVERT = False
+from calibre.utils.fonts.utils import get_font_path
 
 class TechNewsRecipe(BasicNewsRecipe):
-    title = '科技新报 - ' + datetime.datetime.now().strftime('%Y-%m-%d %H:%M')
+    title = '科技新报 - ' + datetime.datetime.now().strftime('%Y-%m-%d')
     language = 'zh-CN'
     oldest_article = 1
     max_articles_per_feed = 15
     auto_cleanup = True
-    no_stylesheets = False
     remove_javascript = True
     compress_news_images = True
     scale_news_images_to = 600
-    
-    # 保留正文
+
+    # --- 封面设置 ---
+    # 尝试获取系统中可用的中文字体，避免封面出现方框
+    cover_font_path = get_font_path(['Noto Sans CJK', 'SimHei', 'Microsoft YaHei'])
+
+    # --- 内容抓取规则 ---
     keep_only_tags = [
         dict(name='h1'),
         dict(name='div', attrs={'class': re.compile(r'entry-content|article-content')}),
         dict(name='article'),
     ]
-    
-    # 移除噪音
+
     remove_tags = [
         dict(name='script'), dict(name='style'), dict(name='iframe'),
         dict(name='nav'), dict(name='header'), dict(name='footer'),
         dict(name='aside'),
         dict(name='div', attrs={'class': re.compile(r'ad|share|related|comment|sidebar|tags|meta', re.I)}),
     ]
-    
+
     feeds = [
         ('科技新报', 'https://technews.tw/tn-rss/'),
     ]
-    
+
     def preprocess_html(self, soup):
-        """预处理：删除广告、赞助、多余内容"""
-        
+        """预处理：强力清洗尾部空白和无关链接"""
+
         # 1. 删除"请喝咖啡"相关内容
         for tag in soup.find_all(string=re.compile(r'喝咖啡|贊助|咖啡|請我們喝|Support us', re.I)):
             if tag.parent:
-                # 向上找到整个段落或div删除
                 parent = tag.find_parent(['div', 'p', 'section', 'article'])
                 if parent:
                     parent.decompose()
-        
+
         # 2. 删除包含特定关键词的链接和div
         for tag in soup.find_all(['div', 'p', 'a'], attrs={'class': re.compile(r'donate|coffee|sponsor|support', re.I)}):
             tag.decompose()
-        
+
         for tag in soup.find_all('a', href=re.compile(r'buycoffee|donate|sponsor', re.I)):
             tag.decompose()
-        
-        # 3. 删除"延伸阅读"后面的内容（通常是推荐文章）
+
+        # 3. 删除"延伸阅读"及其后续所有内容（解决尾部空白关键步骤）
         for tag in soup.find_all(string=re.compile(r'延伸閱讀|相關文章|推薦閱讀')):
             if tag.parent:
                 current = tag.parent
-                # 删除当前元素及其后面的兄弟元素
                 while current:
                     next_elem = current.find_next_sibling()
                     current.decompose()
                     current = next_elem
-        
-        # 4. 删除最后几段无关内容（如"首圖來源"、"本文授權轉載自"等）
+
+        # 4. 删除底部无关信息（首图来源、授权转载等）
         for tag in soup.find_all(string=re.compile(r'首圖來源|本文授權轉載|編譯|核稿|校正|責任編輯', re.I)):
             if tag.parent:
                 tag.parent.decompose()
-        
-        # 5. 删除所有class包含特定词的div
-        for tag in soup.find_all('div', class_=re.compile(r'donate|coffee|sponsor|ad|share|social|recommend|related', re.I)):
-            tag.decompose()
-        
-        # 6. 处理图片
+
+        # 5. 清理所有空的 div 和 p 标签（防止产生空白页）
+        for tag in soup.find_all(['div', 'p']):
+            if not tag.get_text(strip=True) and not tag.find('img'):
+                tag.decompose()
+
+        # 6. 处理图片链接
         for img in soup.find_all('img'):
             real_src = img.get('data-src') or img.get('data-original') or img.get('src', '')
             if real_src:
@@ -118,77 +84,9 @@ class TechNewsRecipe(BasicNewsRecipe):
                 elif real_src.startswith('/'):
                     real_src = 'https://technews.tw' + real_src
                 img['src'] = real_src
-        
-        return soup
-    
-    def postprocess_html(self, soup, first_fetch):
-        """后处理：繁体转简体"""
-        if not CAN_CONVERT:
-            return soup
-        
-        print("✅ 开始繁转简...")
-        count = 0
-        
-        # 只转换正文区域
-        content = soup.find('div', attrs={'class': re.compile(r'entry-content|article-content')})
-        if not content:
-            content = soup.body
-        
-        if content:
-            for element in content.find_all(string=True):
-                text = str(element)
-                if len(text) < 3:
-                    continue
-                if element.parent and element.parent.name in ['script', 'style']:
-                    continue
-                
-                try:
-                    converted = cc.convert(text)
-                    if converted != text:
-                        element.replace_with(converted)
-                        count += 1
-                except:
-                    pass
-        
-        print(f"✅ 转换了 {count} 个文本节点")
-        return soup
-    
-    def get_cover_url(self):
-        """动态生成封面（使用PIL画图，不依赖外部字体文件）"""
-        now_dt = datetime.datetime.now()
-        date_str = now_dt.strftime('%Y-%m-%d %H:%M')
-        
-        width, height = 600, 800
-        img = Image.new('RGB', (width, height), color=(255, 255, 255))
-        draw = ImageDraw.Draw(img)
-        
-        # 使用默认字体（虽然丑但不会方块）
-        # 如果中文字体可用则使用，否则用默认字体画框框
-        font_path = FONT_PATH
-        
-        try:
-            if font_path and os.path.exists(font_path):
-                font_title = ImageFont.truetype(font_path, 70)
-                font_date = ImageFont.truetype(font_path, 36)
-                # 画文字
-                draw.text((width//2, int(height*0.35)), "科技新报", font=font_title, fill=(0, 0, 0), anchor='mm')
-                draw.text((width//2, int(height*0.55)), date_str, font=font_date, fill=(0, 0, 0), anchor='mm')
-            else:
-                # 没有中文字体时，画一个简单的文字框（不画中文）
-                draw.rectangle([50, 200, 550, 350], outline=(0, 0, 0), width=3)
-                draw.rectangle([50, 400, 550, 500], outline=(0, 0, 0), width=2)
-                draw.text((width//2, 275), "TechNews", font=ImageFont.load_default(), fill=(0, 0, 0), anchor='mm')
-                draw.text((width//2, 450), date_str, font=ImageFont.load_default(), fill=(0, 0, 0), anchor='mm')
-        except Exception as e:
-            print(f"封面生成出错: {e}")
-            # 最简单的纯色封面
-            draw.rectangle([0, 0, width, height], fill=(200, 200, 200))
-        
-        buf = BytesIO()
-        img.save(buf, format='PNG')
-        buf.seek(0)
-        return buf
 
-if __name__ == "__main__":
-    from calibre.web.feeds.recipes.utils import cli
-    cli(TechNewsRecipe)
+        return soup
+
+    def postprocess_html(self, soup, first_fetch):
+        """后处理：无需繁转简，直接返回"""
+        return soup
