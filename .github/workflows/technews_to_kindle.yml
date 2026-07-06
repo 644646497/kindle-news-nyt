@@ -1,6 +1,6 @@
 name: Send TechNews to Kindle
 
-on:
+#on:
   schedule:
     - cron: '0 12 * * *'
   workflow_dispatch:
