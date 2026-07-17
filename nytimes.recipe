@@ -8,7 +8,6 @@ import subprocess
 import urllib.request
 import xml.etree.ElementTree as ET
 from io import BytesIO
-from html import unescape
 from PIL import Image, ImageDraw, ImageFont
 from calibre.web.feeds.news import BasicNewsRecipe
 
@@ -22,9 +21,7 @@ except ImportError:
 def ensure_chinese_font():
     font_paths = [
         "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
-        "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
-        "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttf",
-        "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttf"
+        "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc"
     ]
     for path in font_paths:
         if os.path.exists(path):
@@ -53,20 +50,14 @@ class NytimesRecipe(BasicNewsRecipe):
     compress_news_images = True
     scale_news_images_to = 600
     
-    # 存储当前文章标题
-    current_title = ''
-    
+    # 尽量少过滤，保留内容
     remove_tags = [
-        dict(name='script'), 
-        dict(name='style'), 
-        dict(name='iframe'),
-        dict(name='nav'), 
-        dict(name='header'), 
-        dict(name='footer'), 
-        dict(name='aside'), 
-        dict(name='form'),
-        dict(name='div', attrs={'class': re.compile(r'ad|advertisement|sponsor|promo|banner|social|share|comment|related', re.I)}),
-        dict(name='div', attrs={'id': re.compile(r'ad|advertisement|sponsor|promo|banner|social|share|comment|related', re.I)}),
+        dict(name='script'), dict(name='style'), dict(name='iframe'),
+        dict(name='nav'), dict(name='header'), dict(name='footer'), 
+        dict(name='aside'), dict(name='form'),
+        # 只移除明确的广告
+        dict(name='div', attrs={'class': re.compile(r'^ad$|^advertisement$|^sponsor$|^promo$', re.I)}),
+        dict(name='div', attrs={'id': re.compile(r'^ad$|^advertisement$|^sponsor$|^promo$', re.I)}),
     ]
 
     extra_css = '''
@@ -79,27 +70,23 @@ class NytimesRecipe(BasicNewsRecipe):
             margin: 0 auto;
             padding: 20px;
         }
-        .article-title { 
-            font-size: 26px; 
+        h1 { 
+            font-size: 24px; 
             font-weight: bold; 
-            margin: 20px 0 10px 0; 
-            color: #1a1a2e; 
-            text-align: left;
+            margin: 20px 0 10px 0;
+            color: #1a1a2e;
             line-height: 1.4;
         }
-        .article-meta {
-            color: #888;
-            font-size: 14px;
-            margin-bottom: 20px;
-            text-align: left;
-            padding-bottom: 15px;
-            border-bottom: 1px solid #eee;
+        h2 { 
+            font-size: 20px; 
+            font-weight: bold; 
+            margin: 15px 0 8px 0;
+            color: #2d2d44;
         }
         p { 
             margin: 10px 0; 
-            text-indent: 2em; 
-            text-align: justify; 
-            line-height: 1.8;
+            text-indent: 2em;
+            text-align: justify;
         }
         img { 
             max-width: 100%; 
@@ -107,23 +94,21 @@ class NytimesRecipe(BasicNewsRecipe):
             display: block; 
             margin: 10px auto; 
         }
+        .article-meta {
+            color: #666;
+            font-size: 14px;
+            margin: 10px 0;
+        }
         blockquote { 
             border-left: 4px solid #e94560; 
             padding-left: 20px; 
             margin-left: 20px; 
             color: #555; 
         }
-        h1, h2, h3, h4 {
-            margin: 15px 0 10px 0;
-            color: #1a1a2e;
-        }
-        ul, ol { 
-            margin: 10px 0 10px 20px; 
-            padding-left: 20px;
-        }
-        li { 
-            margin: 5px 0; 
-            line-height: 1.8;
+        .article-header {
+            border-bottom: 2px solid #e94560;
+            padding-bottom: 15px;
+            margin-bottom: 20px;
         }
     '''
 
@@ -134,15 +119,11 @@ class NytimesRecipe(BasicNewsRecipe):
         
         try:
             self.log.info(f'正在抓取: {rss_url}')
-            headers = {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-            }
+            headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
             req = urllib.request.Request(rss_url, headers=headers)
             
             with urllib.request.urlopen(req, timeout=30) as response:
                 rss_content = response.read().decode('utf-8')
-            
-            rss_content = re.sub(r'[^\x09\x0A\x0D\x20-\uD7FF\uE000-\uFFFD]', '', rss_content)
             
             root = ET.fromstring(rss_content)
             
@@ -157,8 +138,6 @@ class NytimesRecipe(BasicNewsRecipe):
             for item in items:
                 title_elem = None
                 link_elem = None
-                pubDate_elem = None
-                description_elem = None
                 
                 for child in item:
                     tag_name = child.tag.split('}')[-1] if '}' in child.tag else child.tag
@@ -166,51 +145,25 @@ class NytimesRecipe(BasicNewsRecipe):
                         title_elem = child
                     elif tag_name == 'link':
                         link_elem = child
-                    elif tag_name == 'pubDate':
-                        pubDate_elem = child
-                    elif tag_name == 'description':
-                        description_elem = child
                 
                 if title_elem is None or link_elem is None:
                     continue
                 
                 title = title_elem.text.strip() if title_elem.text else ''
-                title = unescape(title)
-                title = re.sub(r'\s+', ' ', title).strip()
-                title = re.sub(r'^["\']+|["\']+$', '', title)
-                
                 url = link_elem.text.strip() if link_elem.text else ''
                 
-                date = ''
-                if pubDate_elem is not None and pubDate_elem.text:
-                    date = pubDate_elem.text.strip()
-                
-                description = ''
-                if description_elem is not None and description_elem.text:
-                    description = unescape(description_elem.text.strip())
-                    description = re.sub(r'<[^>]+>', '', description)
-                
-                if not title or not url:
+                if not title or not url or len(title) < 10:
                     continue
-                
-                if url.startswith('/'):
-                    url = 'https://cn.nytimes.com' + url
-                elif not url.startswith('http'):
-                    url = 'https://cn.nytimes.com/' + url.lstrip('/')
                 
                 if url in seen_urls:
                     continue
                 
                 seen_urls.add(url)
-                
-                self.log.info(f'抓取文章: {title[:50]}...')
-                
                 articles.append({
                     'title': title,
                     'url': url,
-                    'link': url,
-                    'date': date,
-                    'description': description
+                    'date': '',
+                    'description': ''
                 })
                 
                 if len(articles) >= self.max_articles_per_feed:
@@ -219,108 +172,169 @@ class NytimesRecipe(BasicNewsRecipe):
             if articles:
                 feeds.append(('纽约时报中文网', articles))
                 self.log.info(f'✅ 成功抓取 {len(articles)} 篇文章')
-                titles = [a['title'] for a in articles[:5]]
-                self.log.info(f'前5篇文章标题: {titles}')
             else:
-                self.log.warning('⚠️ 没有抓取到任何文章')
-        
+                self.log.warning('⚠️ 未抓到任何文章')
+                
         except Exception as e:
-            self.log.error(f'❌ 抓取RSS失败: {e}')
+            self.log.error(f'❌ 解析RSS失败: {str(e)}')
             import traceback
-            traceback.print_exc()
+            self.log.error(traceback.format_exc())
         
         return feeds
 
     def preprocess_html(self, soup):
-        """预处理HTML"""
-        # 移除不需要的元素
-        for tag in soup.find_all(['script', 'style', 'iframe', 'nav', 'header', 'footer', 'aside', 'form']):
-            tag.decompose()
-        
-        # 移除广告相关元素
-        for tag in soup.find_all(['div', 'section'], class_=re.compile(r'ad|advertisement|sponsor|promo|banner|social|share|comment|related', re.I)):
-            tag.decompose()
+        """预处理：修复图片链接"""
         
         # 修复图片
         for img in soup.find_all('img'):
-            if img.get('data-src') and not img.get('src'):
-                img['src'] = img['data-src']
-            elif img.get('data-srcset') and not img.get('src'):
-                srcset = img.get('data-srcset', '')
-                if srcset:
-                    first_url = srcset.split(',')[0].strip().split(' ')[0]
-                    img['src'] = first_url
+            src = img.get('data-src') or img.get('src', '')
+            if src:
+                if src.startswith('//'):
+                    src = 'https:' + src
+                elif src.startswith('/') and not src.startswith('//'):
+                    src = 'https://cn.nytimes.com' + src
+                img['src'] = src
         
         return soup
 
     def postprocess_html(self, soup, first_fetch):
-        """后处理HTML - 在文章开头添加标题"""
+        """后处理：添加标题、清理推荐内容和简繁转换"""
         
-        # 从类变量获取标题
-        title = getattr(self, 'current_title', '')
+        # 1. 首先保存文章标题（从RSS中获取的标题）
+        article_title = None
+        # 尝试从title标签获取
+        title_tag = soup.find('title')
+        if title_tag:
+            article_title = title_tag.get_text(strip=True)
+            # 移除网站名称等后缀
+            article_title = re.sub(r'\s*[|•-]\s*纽约时报中文网.*$', '', article_title).strip()
         
-        self.log.info(f'postprocess_html 收到的标题: {title}')
+        # 2. 查找现有的h1标题
+        existing_h1 = soup.find('h1')
+        if existing_h1:
+            # 如果已经有h1，保留它
+            article_title = existing_h1.get_text(strip=True)
+        else:
+            # 如果没有h1，查找其他标题标签
+            for tag in ['h2', 'h3', 'h4']:
+                header = soup.find(tag)
+                if header and len(header.get_text(strip=True)) > 5:
+                    article_title = header.get_text(strip=True)
+                    # 将这个标签改为h1
+                    new_h1 = soup.new_tag('h1')
+                    new_h1.string = article_title
+                    header.replace_with(new_h1)
+                    break
         
-        if title:
-            # 创建标题元素
-            title_tag = soup.new_tag('h1')
-            title_tag['class'] = 'article-title'
-            title_tag.string = title
-            
-            # 创建元数据容器
-            meta_tag = soup.new_tag('div')
-            meta_tag['class'] = 'article-meta'
-            meta_tag.string = '纽约时报中文网'
-            
-            # 在内容最前面插入标题和元数据
-            # 获取body或第一个元素
-            body = soup.find('body')
-            if body:
-                # 在body开头插入
-                first_elem = body.find()
-                if first_elem:
-                    first_elem.insert_before(title_tag)
-                    title_tag.insert_after(meta_tag)
+        # 3. 如果还是找不到标题，使用文件名或其他来源
+        if not article_title or len(article_title) < 5:
+            # 尝试从meta标签获取
+            meta_title = soup.find('meta', {'property': 'og:title'})
+            if meta_title and meta_title.get('content'):
+                article_title = meta_title.get('content').strip()
+        
+        # 4. 如果找到了标题但页面上没有h1，在开头添加标题
+        if article_title and len(article_title) > 5:
+            # 检查是否已经有h1
+            if not soup.find('h1'):
+                # 创建新的h1
+                new_h1 = soup.new_tag('h1', **{'class': 'article-header'})
+                new_h1.string = article_title
+                
+                # 在第一个段落之前插入
+                first_p = soup.find('p')
+                if first_p:
+                    first_p.insert_before(new_h1)
                 else:
-                    body.append(title_tag)
-                    body.append(meta_tag)
-            else:
-                # 如果没有body，找第一个元素
-                first_elem = soup.find()
-                if first_elem:
-                    first_elem.insert_before(title_tag)
-                    title_tag.insert_after(meta_tag)
-                else:
-                    soup.append(title_tag)
-                    soup.append(meta_tag)
+                    # 如果没有段落，在body开头插入
+                    body = soup.find('body')
+                    if body:
+                        body.insert(0, new_h1)
+        
+        # 5. 移除推荐阅读容器
+        for div in soup.find_all(['div', 'section', 'ul', 'ol', 'aside']):
+            classes = ' '.join(div.get('class', [])).lower()
+            div_id = div.get('id', '').lower()
+            combined = classes + ' ' + div_id
+            
+            # 只移除明确的推荐容器
+            if any(k in combined for k in ['related', 'recommend', 'suggestion', 'popular', 'trending', 'most-read']):
+                # 检查是否真的包含链接列表
+                links = div.find_all('a')
+                if len(links) >= 3:
+                    div.decompose()
+                    continue
+            
+            # 检查文本内容
+            text = div.get_text()
+            if any(k in text for k in ['推荐阅读', '相关文章', '热门文章', '更多文章', '你可能感兴趣']):
+                links = div.find_all('a')
+                if len(links) >= 3:
+                    div.decompose()
+                    continue
+        
+        # 6. 移除下载信息
+        for elem in soup.find_all(string=re.compile(r'downloaded by calibre', re.I)):
+            if elem.parent:
+                elem.parent.decompose()
+        
+        # 7. 简繁转换
+        if CAN_CONVERT:
+            for elem in soup.find_all(string=True):
+                text = str(elem)
+                if len(text) > 3:
+                    parent = elem.parent
+                    if parent and parent.name not in ['script', 'style']:
+                        try:
+                            converted = cc.convert(text)
+                            if converted != text:
+                                elem.replace_with(converted)
+                        except:
+                            pass
         
         return soup
 
-    def get_article_url(self, article):
-        """获取文章URL"""
-        if isinstance(article, dict):
-            return article.get('url') or article.get('link')
-        return None
-
-    def get_article_title(self, article):
-        """获取文章标题并存储到类变量"""
-        if isinstance(article, dict):
-            title = article.get('title', '')
-            title = unescape(title)
-            title = re.sub(r'\s+', ' ', title).strip()
-            # 存储到类变量，供postprocess_html使用
-            self.current_title = title
-            self.log.info(f'get_article_title 返回: {title[:50]}...')
-            return title
-        return ''
-
-    def should_download_article(self, url):
-        """判断是否应该下载文章"""
-        if re.search(r'/video/|/photo/|/live/', url):
-            return False
-        return True
-
-    def get_browser(self, user_agent=None):
-        """获取浏览器实例，用于处理JavaScript渲染的内容"""
-        from calibre.web.browser import Browser
-        return Browser()
+    def get_cover_url(self):
+        """生成封面"""
+        try:
+            width, height = 600, 800
+            img = Image.new('RGB', (width, height), color='#1a1a2e')
+            draw = ImageDraw.Draw(img)
+            
+            font_path = FONT_PATH
+            try:
+                if font_path and os.path.exists(font_path):
+                    font_large = ImageFont.truetype(font_path, 72)
+                    font_medium = ImageFont.truetype(font_path, 36)
+                    font_small = ImageFont.truetype(font_path, 28)
+                else:
+                    font_large = font_medium = font_small = ImageFont.load_default()
+            except:
+                font_large = font_medium = font_small = ImageFont.load_default()
+            
+            draw.rectangle([(50, 200), (550, 205)], fill='#e94560')
+            
+            title = '纽约时报'
+            subtitle = '中文网'
+            date_str = datetime.datetime.now().strftime('%Y年%m月%d日')
+            
+            bbox = draw.textbbox((0, 0), title, font=font_large)
+            tw = bbox[2] - bbox[0]
+            draw.text(((width - tw) // 2, 250), title, fill='#ffffff', font=font_large)
+            
+            bbox = draw.textbbox((0, 0), subtitle, font=font_medium)
+            sw = bbox[2] - bbox[0]
+            draw.text(((width - sw) // 2, 340), subtitle, fill='#e94560', font=font_medium)
+            
+            bbox = draw.textbbox((0, 0), date_str, font=font_small)
+            dw = bbox[2] - bbox[0]
+            draw.text(((width - dw) // 2, 450), date_str, fill='#ffffff', font=font_small)
+            
+            cover_bytes = BytesIO()
+            img.save(cover_bytes, 'JPEG', quality=85)
+            cover_bytes.seek(0)
+            return cover_bytes.getvalue()
+            
+        except Exception as e:
+            self.log.error(f'封面生成失败: {e}')
+            return None
