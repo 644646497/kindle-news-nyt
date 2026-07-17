@@ -53,9 +53,7 @@ class NytimesRecipe(BasicNewsRecipe):
     compress_news_images = True
     scale_news_images_to = 600
     
-    # 不使用 keep_only_tags，让内容完整保留
-    # 使用 remove_tags 移除不需要的部分
-    
+    # 移除不需要的标签，但保留标题
     remove_tags = [
         dict(name='script'), 
         dict(name='style'), 
@@ -67,7 +65,6 @@ class NytimesRecipe(BasicNewsRecipe):
         dict(name='form'),
         dict(name='div', attrs={'class': re.compile(r'ad|advertisement|sponsor|promo|banner|social|share|comment|related', re.I)}),
         dict(name='div', attrs={'id': re.compile(r'ad|advertisement|sponsor|promo|banner|social|share|comment|related', re.I)}),
-        dict(name='section', attrs={'class': re.compile(r'ad|advertisement|sponsor|promo|banner|social|share|comment|related', re.I)}),
     ]
 
     extra_css = '''
@@ -80,24 +77,21 @@ class NytimesRecipe(BasicNewsRecipe):
             margin: 0 auto;
             padding: 20px;
         }
-        h1 { 
-            font-size: 24px; 
+        .article-title { 
+            font-size: 26px; 
             font-weight: bold; 
             margin: 20px 0 10px 0; 
             color: #1a1a2e; 
             text-align: left;
+            line-height: 1.4;
         }
-        h2 { 
-            font-size: 20px; 
-            font-weight: bold; 
-            margin: 15px 0 10px 0; 
-            color: #1a1a2e;
-        }
-        h3 { 
-            font-size: 18px; 
-            font-weight: bold; 
-            margin: 12px 0 8px 0; 
-            color: #1a1a2e;
+        .article-meta {
+            color: #888;
+            font-size: 14px;
+            margin-bottom: 20px;
+            text-align: left;
+            padding-bottom: 15px;
+            border-bottom: 1px solid #eee;
         }
         p { 
             margin: 10px 0; 
@@ -117,6 +111,10 @@ class NytimesRecipe(BasicNewsRecipe):
             margin-left: 20px; 
             color: #555; 
         }
+        h1, h2, h3, h4 {
+            margin: 15px 0 10px 0;
+            color: #1a1a2e;
+        }
         ul, ol { 
             margin: 10px 0 10px 20px; 
             padding-left: 20px;
@@ -124,22 +122,6 @@ class NytimesRecipe(BasicNewsRecipe):
         li { 
             margin: 5px 0; 
             line-height: 1.8;
-        }
-        .article-title {
-            font-size: 26px;
-            font-weight: bold;
-            color: #1a1a2e;
-            margin-bottom: 15px;
-            text-align: left;
-        }
-        .article-meta {
-            color: #888;
-            font-size: 14px;
-            margin-bottom: 20px;
-            text-align: left;
-        }
-        .article-content {
-            text-align: justify;
         }
     '''
 
@@ -194,10 +176,8 @@ class NytimesRecipe(BasicNewsRecipe):
                 
                 # 清理标题
                 title = title_elem.text.strip() if title_elem.text else ''
-                # 移除HTML实体和多余空白
                 title = unescape(title)
                 title = re.sub(r'\s+', ' ', title).strip()
-                # 移除首尾的引号或特殊字符
                 title = re.sub(r'^["\']+|["\']+$', '', title)
                 
                 url = link_elem.text.strip() if link_elem.text else ''
@@ -211,7 +191,6 @@ class NytimesRecipe(BasicNewsRecipe):
                 description = ''
                 if description_elem is not None and description_elem.text:
                     description = unescape(description_elem.text.strip())
-                    # 移除HTML标签
                     description = re.sub(r'<[^>]+>', '', description)
                 
                 if not title or not url:
@@ -228,10 +207,9 @@ class NytimesRecipe(BasicNewsRecipe):
                 
                 seen_urls.add(url)
                 
-                # 调试：打印标题看是否正常
                 self.log.info(f'抓取文章: {title[:50]}...')
                 
-                # 使用标准格式
+                # 存储文章信息，包括标题、URL和日期
                 articles.append({
                     'title': title,
                     'url': url,
@@ -246,16 +224,11 @@ class NytimesRecipe(BasicNewsRecipe):
             if articles:
                 feeds.append(('纽约时报中文网', articles))
                 self.log.info(f'✅ 成功抓取 {len(articles)} 篇文章')
-                # 打印前5个标题用于调试
                 titles = [a['title'] for a in articles[:5]]
                 self.log.info(f'前5篇文章标题: {titles}')
             else:
                 self.log.warning('⚠️ 没有抓取到任何文章')
         
-        except ET.ParseError as e:
-            self.log.error(f'❌ RSS解析失败: {e}')
-            self.log.error('尝试使用备用解析方法...')
-            # 可以在这里添加备用解析方法
         except Exception as e:
             self.log.error(f'❌ 抓取RSS失败: {e}')
             import traceback
@@ -264,7 +237,7 @@ class NytimesRecipe(BasicNewsRecipe):
         return feeds
 
     def preprocess_html(self, soup):
-        """预处理HTML，清理和修复内容"""
+        """预处理HTML"""
         # 移除不需要的元素
         for tag in soup.find_all(['script', 'style', 'iframe', 'nav', 'header', 'footer', 'aside', 'form']):
             tag.decompose()
@@ -273,29 +246,18 @@ class NytimesRecipe(BasicNewsRecipe):
         for tag in soup.find_all(['div', 'section'], class_=re.compile(r'ad|advertisement|sponsor|promo|banner|social|share|comment|related', re.I)):
             tag.decompose()
         
-        # 查找文章标题并确保显示
-        title_selectors = [
-            'h1.article-title',
-            'h1.article-headline',
-            'h1.headline',
-            'h1.title',
-            '.article-header h1',
-            '.story-header h1',
-            'header h1'
-        ]
+        # 修复图片
+        for img in soup.find_all('img'):
+            if img.get('data-src') and not img.get('src'):
+                img['src'] = img['data-src']
+            elif img.get('data-srcset') and not img.get('src'):
+                srcset = img.get('data-srcset', '')
+                if srcset:
+                    first_url = srcset.split(',')[0].strip().split(' ')[0]
+                    img['src'] = first_url
         
-        for selector in title_selectors:
-            try:
-                title_elem = soup.select_one(selector)
-                if title_elem:
-                    # 确保标题元素可见
-                    title_elem.name = 'h1'
-                    title_elem['class'] = 'article-title'
-                    break
-            except:
-                continue
-        
-        # 查找文章内容
+        # 查找并保留文章内容
+        # 尝试找到内容容器
         content_selectors = [
             '.article-body',
             '.story-body',
@@ -303,7 +265,8 @@ class NytimesRecipe(BasicNewsRecipe):
             '.story-content',
             '.article-text',
             '.content',
-            'article'
+            'article',
+            '.main-content'
         ]
         
         content_elem = None
@@ -315,22 +278,53 @@ class NytimesRecipe(BasicNewsRecipe):
             except:
                 continue
         
-        # 如果找到内容，提取并清理
+        # 如果找到内容容器，提取它并替换整个soup
         if content_elem:
-            # 移除内容中的广告
-            for tag in content_elem.find_all(['div', 'section'], class_=re.compile(r'ad|advertisement|sponsor|promo', re.I)):
-                tag.decompose()
+            # 创建新的soup只包含内容
+            new_soup = soup.new_tag('div')
+            new_soup.append(content_elem)
+            soup.clear()
+            soup.append(new_soup)
+        
+        return soup
+
+    def postprocess_html(self, soup, first_fetch):
+        """后处理HTML - 在文章开头添加标题"""
+        from calibre.ebooks.BeautifulSoup import BeautifulSoup
+        
+        # 获取当前文章的标题
+        # 从上下文中获取文章标题
+        article_title = getattr(self, '_current_article_title', '')
+        
+        if article_title:
+            # 创建标题元素
+            title_tag = soup.new_tag('h1')
+            title_tag['class'] = 'article-title'
+            title_tag.string = article_title
             
-            # 修复图片
-            for img in content_elem.find_all('img'):
-                if img.get('data-src') and not img.get('src'):
-                    img['src'] = img['data-src']
-                elif img.get('data-srcset') and not img.get('src'):
-                    # 从srcset中提取第一个URL
-                    srcset = img.get('data-srcset', '')
-                    if srcset:
-                        first_url = srcset.split(',')[0].strip().split(' ')[0]
-                        img['src'] = first_url
+            # 创建元数据容器
+            meta_tag = soup.new_tag('div')
+            meta_tag['class'] = 'article-meta'
+            
+            # 尝试从内容中提取日期
+            date_pattern = re.compile(r'\d{4}年\d{1,2}月\d{1,2}日')
+            date_text = soup.find(string=date_pattern)
+            if date_text:
+                meta_tag.append('发布时间: ')
+                meta_tag.append(date_text)
+            
+            # 在内容最前面插入标题和元数据
+            # 找到第一个元素，在其前面插入
+            first_elem = soup.find()
+            if first_elem:
+                # 在第一个元素前插入标题
+                first_elem.insert_before(title_tag)
+                # 在标题后插入元数据
+                title_tag.insert_after(meta_tag)
+            else:
+                # 如果没有任何内容，直接添加
+                soup.append(title_tag)
+                soup.append(meta_tag)
         
         return soup
 
@@ -341,35 +335,19 @@ class NytimesRecipe(BasicNewsRecipe):
         return None
 
     def get_article_title(self, article):
-        """获取文章标题"""
+        """获取文章标题并存储到上下文中"""
         if isinstance(article, dict):
             title = article.get('title', '')
-            # 清理标题
             title = unescape(title)
             title = re.sub(r'\s+', ' ', title).strip()
+            # 存储到实例变量，供postprocess_html使用
+            self._current_article_title = title
             return title
         return ''
 
-    def postprocess_html(self, soup, first_fetch):
-        """后处理HTML"""
-        # 添加文章元数据
-        meta_div = soup.new_tag('div')
-        meta_div['class'] = 'article-meta'
-        
-        # 如果有日期信息，添加日期
-        date_elem = soup.find('time')
-        if date_elem:
-            meta_div.append('发布时间: ')
-            meta_div.append(date_elem)
-        elif soup.find(class_=re.compile(r'date|time|published', re.I)):
-            date_text = soup.find(class_=re.compile(r'date|time|published', re.I))
-            if date_text:
-                meta_div.append('发布时间: ')
-                meta_div.append(date_text.get_text())
-        
-        # 在标题后插入元数据
-        title_elem = soup.find('h1', class_='article-title')
-        if title_elem:
-            title_elem.insert_after(meta_div)
-        
-        return soup
+    def should_download_article(self, url):
+        """判断是否应该下载文章"""
+        # 过滤掉一些不需要的文章类型
+        if re.search(r'/video/|/photo/|/live/', url):
+            return False
+        return True
