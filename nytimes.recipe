@@ -9,7 +9,7 @@ import subprocess
 import urllib.request
 import xml.etree.ElementTree as ET
 from io import BytesIO
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageFont  # 统一在这里导入
 from calibre.web.feeds.news import BasicNewsRecipe
 
 try:
@@ -96,20 +96,17 @@ class NytimesRecipe(BasicNewsRecipe):
                 
                 # 查找所有item（兼容命名空间）
                 items = []
-                # 尝试不同的查找方式
                 for child in root.iter():
                     if child.tag.endswith('item'):
                         items.append(child)
                 
                 if not items:
-                    # 如果没找到，尝试标准路径
                     items = root.findall('.//item')
                 
                 articles = []
                 seen_urls = set()
                 
                 for item in items:
-                    # 获取标题和链接（处理命名空间）
                     title_elem = None
                     link_elem = None
                     
@@ -132,29 +129,18 @@ class NytimesRecipe(BasicNewsRecipe):
                     title = title.strip()
                     url = url.strip()
                     
-                    # 过滤太短的标题（可能是广告）
                     if len(title) < 10:
                         continue
                     
-                    # 避免重复
                     if url in seen_urls:
                         continue
                     
                     seen_urls.add(url)
                     
-                    # 获取发布时间（如果有）
-                    pub_date = ''
-                    for child in item:
-                        tag_name = child.tag.split('}')[-1] if '}' in child.tag else child.tag
-                        if tag_name in ['pubDate', 'published', 'date']:
-                            if child.text:
-                                pub_date = child.text.strip()
-                                break
-                    
                     articles.append({
                         'title': title,
                         'url': url,
-                        'date': pub_date,
+                        'date': '',
                         'description': ''
                     })
                     
@@ -166,22 +152,6 @@ class NytimesRecipe(BasicNewsRecipe):
                     self.log.info(f'✅ 成功抓取 {len(articles)} 篇文章')
                 else:
                     self.log.warning(f'⚠️ 未抓到任何文章: {section_url}')
-                    # 尝试备用RSS地址
-                    try:
-                        backup_url = 'https://cn.nytimes.com/zh-hans/rss/'
-                        self.log.info(f'尝试备用地址: {backup_url}')
-                        req = urllib.request.Request(backup_url, headers=headers)
-                        with urllib.request.urlopen(req, timeout=30) as response:
-                            rss_content = response.read().decode('utf-8')
-                        root = ET.fromstring(rss_content)
-                        items = []
-                        for child in root.iter():
-                            if child.tag.endswith('item'):
-                                items.append(child)
-                        # ... 重复上面的解析逻辑
-                        # (这里简化，实际可以提取为函数)
-                    except Exception as e:
-                        self.log.error(f'备用地址也失败: {e}')
                         
             except Exception as e:
                 self.log.error(f'❌ 解析RSS失败: {str(e)}')
@@ -192,7 +162,6 @@ class NytimesRecipe(BasicNewsRecipe):
 
     def preprocess_html(self, soup):
         """预处理HTML：修复图片链接"""
-        # 修复图片链接
         for img in soup.find_all('img'):
             real_src = img.get('data-src') or img.get('data-original') or img.get('src', '')
             if real_src:
@@ -202,7 +171,6 @@ class NytimesRecipe(BasicNewsRecipe):
                     real_src = 'https://cn.nytimes.com' + real_src
                 img['src'] = real_src
         
-        # 移除广告等无用元素
         for tag in soup.find_all('div', class_=re.compile(r'ad|share|social|promo', re.I)):
             tag.decompose()
         
@@ -225,80 +193,79 @@ class NytimesRecipe(BasicNewsRecipe):
 
     def get_cover_url(self):
         """生成封面图片"""
-        width, height = 600, 800
-        background_color = '#1a1a2e'
-        text_color = '#ffffff'
-        accent_color = '#e94560'
+        try:
+            width, height = 600, 800
+            background_color = '#1a1a2e'
+            text_color = '#ffffff'
+            accent_color = '#e94560'
 
-        img = Image.new('RGB', (width, height), color=background_color)
-        draw = ImageDraw.Draw(img)
+            img = Image.new('RGB', (width, height), color=background_color)
+            draw = ImageDraw.Draw(img)
 
-        font_path = FONT_PATH
-        
-        # 如果没有中文字体，使用默认字体
-        if font_path:
+            font_path = FONT_PATH
+            
+            # 设置字体
             try:
-                # 标题大字体
-                font_large = ImageFont.truetype(font_path, 72)
-                font_medium = ImageFont.truetype(font_path, 36)
-                font_small = ImageFont.truetype(font_path, 28)
+                if font_path and os.path.exists(font_path):
+                    font_large = ImageFont.truetype(font_path, 72)
+                    font_medium = ImageFont.truetype(font_path, 36)
+                    font_small = ImageFont.truetype(font_path, 28)
+                else:
+                    font_large = ImageFont.load_default()
+                    font_medium = ImageFont.load_default()
+                    font_small = ImageFont.load_default()
             except:
                 font_large = ImageFont.load_default()
                 font_medium = ImageFont.load_default()
                 font_small = ImageFont.load_default()
-        else:
-            font_large = ImageFont.load_default()
-            font_medium = ImageFont.load_default()
-            font_small = ImageFont.load_default()
 
-        # 绘制装饰线
-        draw.rectangle([(50, 200), (550, 205)], fill=accent_color)
-        
-        # 绘制标题
-        title_text = '纽约时报'
-        subtitle_text = '中文网'
-        date_text = datetime.datetime.now().strftime('%Y年%m月%d日')
-        
-        # 居中绘制
-        from PIL import ImageDraw
-        try:
-            # 获取文本尺寸
-            bbox = draw.textbbox((0, 0), title_text, font=font_large)
-            title_width = bbox[2] - bbox[0]
-            title_height = bbox[3] - bbox[1]
+            # 绘制装饰线
+            draw.rectangle([(50, 200), (550, 205)], fill=accent_color)
             
-            draw.text(((width - title_width) // 2, 250), title_text, fill=text_color, font=font_large)
+            # 绘制标题
+            title_text = '纽约时报'
+            subtitle_text = '中文网'
+            date_text = datetime.datetime.now().strftime('%Y年%m月%d日')
             
-            bbox = draw.textbbox((0, 0), subtitle_text, font=font_medium)
-            sub_width = bbox[2] - bbox[0]
-            draw.text(((width - sub_width) // 2, 340), subtitle_text, fill=accent_color, font=font_medium)
+            # 居中绘制标题
+            try:
+                bbox = draw.textbbox((0, 0), title_text, font=font_large)
+                title_width = bbox[2] - bbox[0]
+                draw.text(((width - title_width) // 2, 250), title_text, fill=text_color, font=font_large)
+                
+                bbox = draw.textbbox((0, 0), subtitle_text, font=font_medium)
+                sub_width = bbox[2] - bbox[0]
+                draw.text(((width - sub_width) // 2, 340), subtitle_text, fill=accent_color, font=font_medium)
+                
+                bbox = draw.textbbox((0, 0), date_text, font=font_small)
+                date_width = bbox[2] - bbox[0]
+                draw.text(((width - date_width) // 2, 450), date_text, fill=text_color, font=font_small)
+                
+                footer_text = 'Kindle 推送版'
+                bbox = draw.textbbox((0, 0), footer_text, font=font_small)
+                footer_width = bbox[2] - bbox[0]
+                draw.text(((width - footer_width) // 2, 700), footer_text, fill='#666666', font=font_small)
+                
+            except Exception as e:
+                print(f'封面绘制错误: {e}')
+                # 备用方案：简单文本
+                draw.text((50, 300), '纽约时报中文网', fill=text_color, font=font_large)
+                draw.text((50, 400), date_text, fill=text_color, font=font_small)
+
+            # 保存为字节流
+            cover_bytes = BytesIO()
+            img.save(cover_bytes, 'JPEG', quality=85)
+            cover_bytes.seek(0)
             
-            bbox = draw.textbbox((0, 0), date_text, font=font_small)
-            date_width = bbox[2] - bbox[0]
-            draw.text(((width - date_width) // 2, 450), date_text, fill=text_color, font=font_small)
-            
-            # 底部信息
-            footer_text = 'Kindle 推送版'
-            bbox = draw.textbbox((0, 0), footer_text, font=font_small)
-            footer_width = bbox[2] - bbox[0]
-            draw.text(((width - footer_width) // 2, 700), footer_text, fill='#666666', font=font_small)
+            # 返回图片数据（作为 bytes）
+            return cover_bytes.getvalue()
             
         except Exception as e:
-            print(f'封面绘制错误: {e}')
-            # 如果绘制失败，使用简单文本
-            draw.text((50, 300), '纽约时报中文网', fill=text_color, font=font_large)
-            draw.text((50, 400), date_text, fill=text_color, font=font_small)
-
-        # 保存为字节流
-        cover_bytes = BytesIO()
-        img.save(cover_bytes, 'JPEG', quality=85)
-        cover_bytes.seek(0)
-        
-        # 返回图片数据
-        return cover_bytes
+            self.log.error(f'生成封面失败: {e}')
+            return None
 
     def extra_css(self):
-        """自定义CSS样式"""
+        """自定义CSS样式 - 注意：这是一个方法，返回字符串"""
         return '''
         body { 
             font-family: "Noto Sans CJK SC", "PingFang SC", "Microsoft YaHei", sans-serif;
