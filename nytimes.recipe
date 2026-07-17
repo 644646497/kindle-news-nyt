@@ -53,7 +53,9 @@ class NytimesRecipe(BasicNewsRecipe):
     compress_news_images = True
     scale_news_images_to = 600
     
-    # 移除不需要的标签，但保留标题
+    # 存储当前文章标题
+    current_title = ''
+    
     remove_tags = [
         dict(name='script'), 
         dict(name='style'), 
@@ -140,12 +142,10 @@ class NytimesRecipe(BasicNewsRecipe):
             with urllib.request.urlopen(req, timeout=30) as response:
                 rss_content = response.read().decode('utf-8')
             
-            # 清理可能存在的非法XML字符
             rss_content = re.sub(r'[^\x09\x0A\x0D\x20-\uD7FF\uE000-\uFFFD]', '', rss_content)
             
             root = ET.fromstring(rss_content)
             
-            # 获取所有 item
             items = []
             for child in root.iter():
                 if child.tag.endswith('item'):
@@ -174,7 +174,6 @@ class NytimesRecipe(BasicNewsRecipe):
                 if title_elem is None or link_elem is None:
                     continue
                 
-                # 清理标题
                 title = title_elem.text.strip() if title_elem.text else ''
                 title = unescape(title)
                 title = re.sub(r'\s+', ' ', title).strip()
@@ -182,12 +181,10 @@ class NytimesRecipe(BasicNewsRecipe):
                 
                 url = link_elem.text.strip() if link_elem.text else ''
                 
-                # 获取日期
                 date = ''
                 if pubDate_elem is not None and pubDate_elem.text:
                     date = pubDate_elem.text.strip()
                 
-                # 获取描述
                 description = ''
                 if description_elem is not None and description_elem.text:
                     description = unescape(description_elem.text.strip())
@@ -196,7 +193,6 @@ class NytimesRecipe(BasicNewsRecipe):
                 if not title or not url:
                     continue
                 
-                # 确保URL是完整的
                 if url.startswith('/'):
                     url = 'https://cn.nytimes.com' + url
                 elif not url.startswith('http'):
@@ -209,7 +205,6 @@ class NytimesRecipe(BasicNewsRecipe):
                 
                 self.log.info(f'抓取文章: {title[:50]}...')
                 
-                # 存储文章信息，包括标题、URL和日期
                 articles.append({
                     'title': title,
                     'url': url,
@@ -256,75 +251,48 @@ class NytimesRecipe(BasicNewsRecipe):
                     first_url = srcset.split(',')[0].strip().split(' ')[0]
                     img['src'] = first_url
         
-        # 查找并保留文章内容
-        # 尝试找到内容容器
-        content_selectors = [
-            '.article-body',
-            '.story-body',
-            '.article-content',
-            '.story-content',
-            '.article-text',
-            '.content',
-            'article',
-            '.main-content'
-        ]
-        
-        content_elem = None
-        for selector in content_selectors:
-            try:
-                content_elem = soup.select_one(selector)
-                if content_elem:
-                    break
-            except:
-                continue
-        
-        # 如果找到内容容器，提取它并替换整个soup
-        if content_elem:
-            # 创建新的soup只包含内容
-            new_soup = soup.new_tag('div')
-            new_soup.append(content_elem)
-            soup.clear()
-            soup.append(new_soup)
-        
         return soup
 
     def postprocess_html(self, soup, first_fetch):
         """后处理HTML - 在文章开头添加标题"""
-        from calibre.ebooks.BeautifulSoup import BeautifulSoup
         
-        # 获取当前文章的标题
-        # 从上下文中获取文章标题
-        article_title = getattr(self, '_current_article_title', '')
+        # 从类变量获取标题
+        title = getattr(self, 'current_title', '')
         
-        if article_title:
+        self.log.info(f'postprocess_html 收到的标题: {title}')
+        
+        if title:
             # 创建标题元素
             title_tag = soup.new_tag('h1')
             title_tag['class'] = 'article-title'
-            title_tag.string = article_title
+            title_tag.string = title
             
             # 创建元数据容器
             meta_tag = soup.new_tag('div')
             meta_tag['class'] = 'article-meta'
-            
-            # 尝试从内容中提取日期
-            date_pattern = re.compile(r'\d{4}年\d{1,2}月\d{1,2}日')
-            date_text = soup.find(string=date_pattern)
-            if date_text:
-                meta_tag.append('发布时间: ')
-                meta_tag.append(date_text)
+            meta_tag.string = '纽约时报中文网'
             
             # 在内容最前面插入标题和元数据
-            # 找到第一个元素，在其前面插入
-            first_elem = soup.find()
-            if first_elem:
-                # 在第一个元素前插入标题
-                first_elem.insert_before(title_tag)
-                # 在标题后插入元数据
-                title_tag.insert_after(meta_tag)
+            # 获取body或第一个元素
+            body = soup.find('body')
+            if body:
+                # 在body开头插入
+                first_elem = body.find()
+                if first_elem:
+                    first_elem.insert_before(title_tag)
+                    title_tag.insert_after(meta_tag)
+                else:
+                    body.append(title_tag)
+                    body.append(meta_tag)
             else:
-                # 如果没有任何内容，直接添加
-                soup.append(title_tag)
-                soup.append(meta_tag)
+                # 如果没有body，找第一个元素
+                first_elem = soup.find()
+                if first_elem:
+                    first_elem.insert_before(title_tag)
+                    title_tag.insert_after(meta_tag)
+                else:
+                    soup.append(title_tag)
+                    soup.append(meta_tag)
         
         return soup
 
@@ -335,19 +303,24 @@ class NytimesRecipe(BasicNewsRecipe):
         return None
 
     def get_article_title(self, article):
-        """获取文章标题并存储到上下文中"""
+        """获取文章标题并存储到类变量"""
         if isinstance(article, dict):
             title = article.get('title', '')
             title = unescape(title)
             title = re.sub(r'\s+', ' ', title).strip()
-            # 存储到实例变量，供postprocess_html使用
-            self._current_article_title = title
+            # 存储到类变量，供postprocess_html使用
+            self.current_title = title
+            self.log.info(f'get_article_title 返回: {title[:50]}...')
             return title
         return ''
 
     def should_download_article(self, url):
         """判断是否应该下载文章"""
-        # 过滤掉一些不需要的文章类型
         if re.search(r'/video/|/photo/|/live/', url):
             return False
         return True
+
+    def get_browser(self, user_agent=None):
+        """获取浏览器实例，用于处理JavaScript渲染的内容"""
+        from calibre.web.browser import Browser
+        return Browser()
