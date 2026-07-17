@@ -48,24 +48,18 @@ class DWRecipe(BasicNewsRecipe):
     compress_news_images = True
     scale_news_images_to = 600
     
-    # 使用 Calibre 的 feeds 属性自动处理 RSS
+    # 使用 feeds
     feeds = [
         ('德国之声中文网', 'https://rss.dw.com/rdf/rss-zh')
     ]
     
-    keep_only_tags = [
-        dict(name='h1'),
-        dict(name='article'),
-        dict(name='div', attrs={'class': re.compile(r'article|content|story|post|entry|body', re.I)}),
-        dict(name='main'),
-    ]
-
+    # 不使用 keep_only_tags，用 remove_tags 移除干扰
     remove_tags = [
         dict(name='script'), dict(name='style'), dict(name='iframe'),
         dict(name='nav'), dict(name='header'), dict(name='footer'),
         dict(name='aside'),
-        dict(name='div', attrs={'class': re.compile(r'ad|advertisement|sponsor|promo|banner|share|social', re.I)}),
-        dict(name='div', attrs={'id': re.compile(r'ad|advertisement|sponsor|promo|banner|share|social', re.I)}),
+        dict(name='div', attrs={'class': re.compile(r'ad|advertisement|sponsor|promo|banner|share|social|related|recommend', re.I)}),
+        dict(name='div', attrs={'id': re.compile(r'ad|advertisement|sponsor|promo|banner|share|social|related|recommend', re.I)}),
         dict(name='div', attrs={'class': re.compile(r'comment|discussion|response|tag|meta', re.I)}),
     ]
 
@@ -109,14 +103,10 @@ class DWRecipe(BasicNewsRecipe):
             margin-left: 20px; 
             color: #555; 
         }
-        .article-meta {
-            color: #666;
-            font-size: 14px;
-            margin: 10px 0;
-        }
     '''
 
     def preprocess_html(self, soup):
+        # 修复图片
         for img in soup.find_all('img'):
             src = img.get('data-src') or img.get('src', '')
             if src:
@@ -125,6 +115,31 @@ class DWRecipe(BasicNewsRecipe):
                 elif src.startswith('/') and not src.startswith('//'):
                     src = 'https://www.dw.com' + src
                 img['src'] = src
+        
+        # 尝试找到文章主体 - 德国之声的文章通常在 div 中
+        # 如果找到了 article 或 content 容器，保留它
+        article_body = None
+        
+        # 尝试常见的选择器
+        selectors = [
+            ('div', {'class': re.compile(r'article-content|story-content|entry-content|post-content', re.I)}),
+            ('div', {'class': re.compile(r'content|article-body|story-body', re.I)}),
+            ('div', {'itemprop': 'articleBody'}),
+            ('article', {}),
+        ]
+        
+        for tag_name, attrs in selectors:
+            if attrs:
+                article_body = soup.find(tag_name, attrs=attrs)
+            else:
+                article_body = soup.find(tag_name)
+            if article_body:
+                break
+        
+        if article_body:
+            # 只保留文章主体
+            soup = article_body
+        
         return soup
 
     def postprocess_html(self, soup, first_fetch):
@@ -137,108 +152,4 @@ class DWRecipe(BasicNewsRecipe):
                 title = re.sub(r'^DW\s*[|•-]\s*', '', title).strip()
                 if title and len(title) > 5:
                     new_h1 = soup.new_tag('h1')
-                    new_h1.string = title
-                    first_elem = soup.find(['p', 'div', 'h2', 'h3'])
-                    if first_elem:
-                        first_elem.insert_before(new_h1)
-                    else:
-                        body = soup.find('body')
-                        if body:
-                            body.insert(0, new_h1)
-            
-            if not soup.find('h1'):
-                h2 = soup.find('h2')
-                if h2:
-                    title = h2.get_text(strip=True)
-                    if title and len(title) > 5:
-                        new_h1 = soup.new_tag('h1')
-                        new_h1.string = title
-                        h2.replace_with(new_h1)
-        
-        # 移除推荐列表
-        for div in soup.find_all(['div', 'section', 'ul', 'ol']):
-            classes = ' '.join(div.get('class', [])).lower()
-            div_id = div.get('id', '').lower()
-            text = div.get_text()
-            
-            is_related = False
-            if any(k in classes or k in div_id for k in ['related', 'recommend', 'suggestion', 'popular', 'trending']):
-                is_related = True
-            if any(k in text for k in ['推荐阅读', '相关文章', '热门文章', '更多文章', '你可能感兴趣']):
-                is_related = True
-            
-            if is_related:
-                links = div.find_all('a')
-                if len(links) >= 3:
-                    div.decompose()
-                    continue
-        
-        # 移除下载信息
-        for elem in soup.find_all(string=re.compile(r'downloaded by calibre', re.I)):
-            if elem.parent:
-                elem.parent.decompose()
-        
-        # 简繁转换
-        if CAN_CONVERT:
-            for elem in soup.find_all(string=True):
-                text = str(elem)
-                if len(text) > 3:
-                    parent = elem.parent
-                    if parent and parent.name not in ['script', 'style']:
-                        try:
-                            converted = cc.convert(text)
-                            if converted != text:
-                                elem.replace_with(converted)
-                        except:
-                            pass
-        
-        return soup
-
-    def get_cover_url(self):
-        try:
-            width, height = 600, 800
-            img = Image.new('RGB', (width, height), color='#1a1a2e')
-            draw = ImageDraw.Draw(img)
-            
-            font_path = FONT_PATH
-            try:
-                if font_path and os.path.exists(font_path):
-                    font_large = ImageFont.truetype(font_path, 72)
-                    font_medium = ImageFont.truetype(font_path, 36)
-                    font_small = ImageFont.truetype(font_path, 28)
-                else:
-                    font_large = font_medium = font_small = ImageFont.load_default()
-            except:
-                font_large = font_medium = font_small = ImageFont.load_default()
-            
-            draw.rectangle([(50, 200), (550, 205)], fill='#e94560')
-            
-            title = '德国之声'
-            subtitle = '中文网'
-            date_str = datetime.datetime.now().strftime('%Y年%m月%d日')
-            
-            bbox = draw.textbbox((0, 0), title, font=font_large)
-            tw = bbox[2] - bbox[0]
-            draw.text(((width - tw) // 2, 250), title, fill='#ffffff', font=font_large)
-            
-            bbox = draw.textbbox((0, 0), subtitle, font=font_medium)
-            sw = bbox[2] - bbox[0]
-            draw.text(((width - sw) // 2, 340), subtitle, fill='#e94560', font=font_medium)
-            
-            bbox = draw.textbbox((0, 0), date_str, font=font_small)
-            dw = bbox[2] - bbox[0]
-            draw.text(((width - dw) // 2, 450), date_str, fill='#ffffff', font=font_small)
-            
-            footer_text = 'Kindle 推送版'
-            bbox = draw.textbbox((0, 0), footer_text, font=font_small)
-            fw = bbox[2] - bbox[0]
-            draw.text(((width - fw) // 2, 700), footer_text, fill='#666666', font=font_small)
-            
-            cover_bytes = BytesIO()
-            img.save(cover_bytes, 'JPEG', quality=85)
-            cover_bytes.seek(0)
-            return cover_bytes.getvalue()
-            
-        except Exception as e:
-            self.log.error(f'封面生成失败: {e}')
-            return None
+         
