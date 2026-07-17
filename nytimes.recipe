@@ -67,40 +67,16 @@ class NytimesRecipe(BasicNewsRecipe):
     ]
 
     remove_tags = [
-        # 移除脚本和样式
         dict(name='script'), dict(name='style'), dict(name='iframe'),
-        # 移除导航和页脚
         dict(name='nav'), dict(name='header'), dict(name='footer'),
         dict(name='aside'),
-        # 移除广告和社交媒体
-        dict(name='div', attrs={'class': re.compile(r'ad|advertisement|sponsor|promo|banner', re.I)}),
-        dict(name='div', attrs={'id': re.compile(r'ad|advertisement|sponsor|promo|banner', re.I)}),
-        # 移除分享按钮
-        dict(name='div', attrs={'class': re.compile(r'share|social|twitter|facebook|wechat|weibo', re.I)}),
-        dict(name='div', attrs={'id': re.compile(r'share|social|twitter|facebook|wechat|weibo', re.I)}),
-        # 移除相关文章推荐
-        dict(name='div', attrs={'class': re.compile(r'related|recommend|suggestion|more|popular|trending', re.I)}),
-        dict(name='div', attrs={'id': re.compile(r'related|recommend|suggestion|more|popular|trending', re.I)}),
-        dict(name='section', attrs={'class': re.compile(r'related|recommend|suggestion|more|popular|trending', re.I)}),
-        # 移除评论
-        dict(name='div', attrs={'class': re.compile(r'comment|discussion|response', re.I)}),
-        dict(name='div', attrs={'id': re.compile(r'comment|discussion|response', re.I)}),
-        # 移除标签和元数据
-        dict(name='div', attrs={'class': re.compile(r'tag|meta|copyright|disclaimer', re.I)}),
-        dict(name='div', attrs={'id': re.compile(r'tag|meta|copyright|disclaimer', re.I)}),
-        # 移除订阅和新闻简报
-        dict(name='div', attrs={'class': re.compile(r'newsletter|subscribe|signup|email', re.I)}),
-        dict(name='div', attrs={'id': re.compile(r'newsletter|subscribe|signup|email', re.I)}),
-        # 移除作者信息（保留在文章开头即可）
-        dict(name='div', attrs={'class': re.compile(r'byline|author|bio|credit', re.I)}),
-        # 移除列表中的额外文章
+        dict(name='div', attrs={'class': re.compile(r'ad|advertisement|sponsor|promo|banner|share|social|twitter|facebook|wechat|weibo|comment|discussion|response|tag|meta|copyright|disclaimer|newsletter|subscribe|signup', re.I)}),
+        dict(name='div', attrs={'id': re.compile(r'ad|advertisement|sponsor|promo|banner|share|social|twitter|facebook|wechat|weibo|comment|discussion|response|tag|meta|copyright|disclaimer|newsletter|subscribe|signup', re.I)}),
+        dict(name='section', attrs={'class': re.compile(r'related|recommend|suggestion|more|popular|trending|most-read', re.I)}),
         dict(name='ul', attrs={'class': re.compile(r'related|recommend', re.I)}),
         dict(name='ol', attrs={'class': re.compile(r'related|recommend', re.I)}),
-        # 移除下载信息
-        dict(name='div', attrs={'class': re.compile(r'download|powered|calibre', re.I)}),
     ]
 
-    # CSS 样式
     extra_css = '''
         body { 
             font-family: "Noto Sans CJK SC", "PingFang SC", "Microsoft YaHei", sans-serif;
@@ -147,7 +123,6 @@ class NytimesRecipe(BasicNewsRecipe):
     '''
 
     def parse_index(self):
-        """解析RSS获取文章列表"""
         feeds = []
         sections = [
             ('纽约时报中文网', 'https://cn.nytimes.com/rss/'),
@@ -231,9 +206,7 @@ class NytimesRecipe(BasicNewsRecipe):
         return feeds
 
     def preprocess_html(self, soup):
-        """预处理HTML：修复图片链接和清理无关内容"""
-        
-        # 修复图片链接
+        """预处理HTML：修复图片链接"""
         for img in soup.find_all('img'):
             real_src = img.get('data-src') or img.get('data-original') or img.get('src', '')
             if real_src:
@@ -243,38 +216,18 @@ class NytimesRecipe(BasicNewsRecipe):
                     real_src = 'https://cn.nytimes.com' + real_src
                 img['src'] = real_src
         
-        # 移除包含"下载"或"calibre"的div
+        # 移除包含下载信息的div
         for div in soup.find_all('div'):
-            if div.get('class'):
-                class_text = ' '.join(div.get('class', []))
-                if 'download' in class_text.lower() or 'powered' in class_text.lower():
-                    div.decompose()
             if div.string and 'downloaded by calibre' in str(div.string).lower():
                 div.decompose()
-        
-        # 移除文章末尾的推荐列表
-        for div in soup.find_all(['div', 'section', 'ul', 'ol']):
-            class_text = ' '.join(div.get('class', [])) if div.get('class') else ''
-            id_text = div.get('id', '')
-            combined = (class_text + ' ' + id_text).lower()
-            
-            if any(keyword in combined for keyword in ['related', 'recommend', 'suggestion', 'more-news', 'popular', 'trending', 'most-read']):
-                div.decompose()
-        
-        # 移除包含文章列表的容器
-        for div in soup.find_all('div', class_=re.compile(r'container|wrapper|list', re.I)):
-            # 检查是否包含多个文章链接
-            links = div.find_all('a')
-            if len(links) > 3:
-                # 检查链接是否像文章标题
-                article_links = [l for l in links if len(l.get_text(strip=True)) > 15]
-                if len(article_links) > 2:
-                    div.decompose()
         
         return soup
 
     def postprocess_html(self, soup, first_fetch):
-        """后处理：简繁转换"""
+        """
+        后处理：简繁转换 + 截断文章内容，移除推荐列表
+        """
+        # 1. 先进行简繁转换
         if CAN_CONVERT:
             for element in soup.find_all(string=True):
                 text = str(element)
@@ -286,6 +239,65 @@ class NytimesRecipe(BasicNewsRecipe):
                                 element.replace_with(converted)
                         except Exception:
                             pass
+        
+        # 2. 查找并移除推荐内容（核心修复）
+        # 查找所有包含 "recommended" 或 "related" 的容器
+        for div in soup.find_all(['div', 'section', 'aside', 'ul', 'ol']):
+            class_str = ' '.join(div.get('class', [])).lower() if div.get('class') else ''
+            id_str = div.get('id', '').lower()
+            combined = class_str + ' ' + id_str
+            
+            # 如果包含这些关键词，直接删除整个元素
+            if any(keyword in combined for keyword in [
+                'recommend', 'related', 'suggestion', 'more-news', 
+                'popular', 'trending', 'most-read', 'most-popular',
+                'read-next', 'you-may-like', 'also-read'
+            ]):
+                div.decompose()
+                continue
+        
+        # 3. 查找所有包含多个文章链接的容器（可能是推荐列表）
+        for div in soup.find_all(['div', 'section']):
+            links = div.find_all('a')
+            if len(links) >= 3:
+                # 检查这些链接是否都包含较长的文本（可能是文章标题）
+                long_links = [l for l in links if len(l.get_text(strip=True)) > 10]
+                if len(long_links) >= 3:
+                    # 检查是否包含图片
+                    images = div.find_all('img')
+                    if len(images) >= 2:
+                        # 这是推荐文章列表，删除它
+                        div.decompose()
+                        continue
+        
+        # 4. 查找包含 "更多文章" 或类似文本的容器
+        for element in soup.find_all(['div', 'section', 'p', 'h2', 'h3', 'h4']):
+            if element.string:
+                text = element.string.strip()
+                if any(keyword in text for keyword in ['更多文章', '相关推荐', '阅读更多', '其他新闻', '热门文章']):
+                    # 删除这个元素及其父容器
+                    parent = element.parent
+                    if parent:
+                        parent.decompose()
+                    else:
+                        element.decompose()
+        
+        # 5. 查找文章结尾的分隔线（如果有）
+        for hr in soup.find_all('hr'):
+            # 检查hr后面的内容是否包含推荐列表
+            next_sibling = hr.find_next_sibling()
+            if next_sibling:
+                # 如果hr后面跟的是文章列表，删除hr及其后面的内容
+                links_after = next_sibling.find_all('a')
+                if len(links_after) >= 3:
+                    hr.decompose()
+                    # 继续删除后续的兄弟元素，直到遇到文章结束
+                    current = next_sibling
+                    while current:
+                        next_elem = current.find_next_sibling()
+                        current.decompose()
+                        current = next_elem
+        
         return soup
 
     def get_cover_url(self):
