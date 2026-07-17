@@ -1,0 +1,144 @@
+#!/usr/bin/env python
+# vim:fileencoding=utf-8
+from __future__ import unicode_literals, division, absolute_import, print_function
+import re
+import datetime
+import time
+import os
+import subprocess
+from io import BytesIO
+from PIL import Image, ImageDraw, ImageFont
+from calibre.web.feeds.news import BasicNewsRecipe
+
+try:
+    from opencc import OpenCC
+    cc = OpenCC('t2s')
+    CAN_CONVERT = True
+except ImportError:
+    CAN_CONVERT = False
+
+# --- 1. 环境初始化：自动安装中文字体 (解决方块问题) ---
+def ensure_chinese_font():
+    font_paths = [
+        "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
+        "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc"
+    ]
+
+    for path in font_paths:
+        if os.path.exists(path):
+            return path
+
+    print(">>> 未检测到中文字体，正在尝试安装...")
+    try:
+        subprocess.run(["sudo", "apt-get", "update"], check=True, capture_output=True)
+        subprocess.run(["sudo", "apt-get", "install", "-y", "fonts-noto-cjk"], check=True, capture_output=True)
+        subprocess.run(["fc-cache", "-f"], check=True, capture_output=True)
+
+        for path in font_paths:
+            if os.path.exists(path):
+                return path
+    except Exception as e:
+        print(f">>> 安装字体失败: {e}")
+
+    return None
+
+FONT_PATH = ensure_chinese_font()
+
+class NytimesRecipe(BasicNewsRecipe):
+    title = '纽约时报中文网 - ' + datetime.datetime.now().strftime('%Y-%m-%d %H:%M')
+    language = 'zh-CN'
+    oldest_article = 1
+    max_articles_per_feed = 20
+    auto_cleanup = True
+    no_stylesheets = False
+    remove_javascript = True
+    compress_news_images = True
+    scale_news_images_to = 600
+
+    keep_only_tags = [
+        dict(name='h1'),
+        dict(name='article', attrs={'class': re.compile(r'article-content')}),
+        dict(name='div', attrs={'class': re.compile(r'article-body|article-content|story-body')}),
+        dict(name='article'),
+    ]
+
+    remove_tags = [
+        dict(name='script'), dict(name='style'), dict(name='iframe'),
+        dict(name='nav'), dict(name='header'), dict(name='footer'),
+        dict(name='aside'),
+        dict(name='div', attrs={'class': re.compile(r'ad|share|related|comment|sidebar|tags|meta', re.I)}),
+    ]
+
+    def parse_index(self):
+        feeds = []
+        sections = [('纽约时报中文网', 'https://cn.nytimes.com/rss/')]
+
+        for section_name, section_url in sections:
+            try:
+                soup = self.index_to_soup(section_url)
+                articles = []
+                seen_urls = set()
+
+                for item in soup.find_all('item'):
+                    title_tag = item.find('title')
+                    link_tag = item.find('link')
+                    if title_tag and link_tag:
+                        title = title_tag.get_text(strip=True)
+                        url = link_tag.get_text(strip=True)
+                        if title and len(title) > 5 and url not in seen_urls:
+                            seen_urls.add(url)
+                            articles.append({'title': title, 'url': url, 'date': '', 'description': ''})
+                        if len(articles) >= self.max_articles_per_feed:
+                            break
+
+                if articles:
+                    feeds.append((section_name, articles))
+            except Exception as e:
+                self.log.error(str(e))
+
+        return feeds
+
+    def preprocess_html(self, soup):
+        for img in soup.find_all('img'):
+            real_src = img.get('data-src') or img.get('data-original') or img.get('src', '')
+            if real_src:
+                if real_src.startswith('//'):
+                    real_src = 'https:' + real_src
+                elif real_src.startswith('/'):
+                    real_src = 'https://cn.nytimes.com' + real_src
+                img['src'] = real_src
+        for tag in soup.find_all('div', class_=re.compile(r'ad|share|social', re.I)):
+            tag.decompose()
+        return soup
+
+    def postprocess_html(self, soup, first_fetch):
+        if CAN_CONVERT:
+            for element in soup.find_all(string=True):
+                text = str(element)
+                if len(text) > 3:
+                    if element.parent and element.parent.name not in ['script', 'style']:
+                        try:
+                            converted = cc.convert(text)
+                            if converted != text:
+                                element.replace_with(converted)
+                        except:
+                            pass
+        return soup
+
+    def get_cover_url(self):
+        width, height = 600, 800
+        background_color = '#FFFFFF'
+        text_color = '#000000'
+
+        img = Image.new('RGB', (width, height), color=background_color)
+        draw = ImageDraw.Draw(img)
+
+        font_path = FONT_PATH
+        font_large_size = 80
+        font_small_size = 40
+
+        try:
+            if font_path:
+                font_large = ImageFont.truetype(font_path, font_large_size)
+                font_small = ImageFont.truetype(font_path, font_small_size)
+  
