@@ -17,7 +17,7 @@ try:
 except ImportError:
     CAN_CONVERT = False
 
-# --- 1. 环境初始化：自动安装中文字体 (解决方块问题) ---
+# --- 1. 环境初始化：自动安装中文字体 ---
 def ensure_chinese_font():
     font_paths = [
         "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
@@ -33,7 +33,6 @@ def ensure_chinese_font():
         subprocess.run(["sudo", "apt-get", "update"], check=True, capture_output=True)
         subprocess.run(["sudo", "apt-get", "install", "-y", "fonts-noto-cjk"], check=True, capture_output=True)
         subprocess.run(["fc-cache", "-f"], check=True, capture_output=True)
-
         for path in font_paths:
             if os.path.exists(path):
                 return path
@@ -121,7 +120,7 @@ class NytimesRecipe(BasicNewsRecipe):
                             converted = cc.convert(text)
                             if converted != text:
                                 element.replace_with(converted)
-                        except:
+                        except Exception:
                             pass
         return soup
 
@@ -141,4 +140,38 @@ class NytimesRecipe(BasicNewsRecipe):
             if font_path:
                 font_large = ImageFont.truetype(font_path, font_large_size)
                 font_small = ImageFont.truetype(font_path, font_small_size)
-  
+            else:
+                font_large = ImageFont.load_default()
+                font_small = ImageFont.load_default()
+        except Exception:
+            font_large = ImageFont.load_default()
+            font_small = ImageFont.load_default()
+
+        title_text = "纽约时报"
+        try:
+            bbox = draw.textbbox((0, 0), title_text, font=font_large)
+            text_width = bbox[2] - bbox[0]
+            x = (width - text_width) / 2
+            y = height * 0.4
+            draw.text((x, y), title_text, fill=text_color, font=font_large)
+        except Exception:
+            pass
+
+        now_str = datetime.datetime.now().strftime('%Y-%m-%d %H:%M')
+        try:
+            bbox_time = draw.textbbox((0, 0), now_str, font=font_small)
+            time_width = bbox_time[2] - bbox_time[0]
+            x_time = (width - time_width) / 2
+            y_time = height * 0.6
+            draw.text((x_time, y_time), now_str, fill=text_color, font=font_small)
+        except Exception:
+            pass
+
+        cover_path = os.path.join(os.getcwd(), 'cover.png')
+        img.save(cover_path)
+        return cover_path
+
+
+if __name__ == "__main__":
+    from calibre.web.feeds.recipes.utils import cli
+    cli(NytimesRecipe)
