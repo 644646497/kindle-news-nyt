@@ -5,7 +5,6 @@ import re
 import datetime
 import os
 import subprocess
-import urllib.request
 from io import BytesIO
 from PIL import Image, ImageDraw, ImageFont
 from calibre.web.feeds.news import BasicNewsRecipe
@@ -48,6 +47,11 @@ class DWRecipe(BasicNewsRecipe):
     remove_javascript = True
     compress_news_images = True
     scale_news_images_to = 600
+    
+    # 使用 Calibre 的 feeds 属性自动处理 RSS
+    feeds = [
+        ('德国之声中文网', 'https://rss.dw.com/rdf/rss-zh')
+    ]
     
     keep_only_tags = [
         dict(name='h1'),
@@ -111,71 +115,6 @@ class DWRecipe(BasicNewsRecipe):
             margin: 10px 0;
         }
     '''
-
-    def parse_index(self):
-        feeds = []
-        # 德国之声的RSS是RDF格式
-        rss_url = 'https://rss.dw.com/rdf/rss-zh'
-        
-        try:
-            self.log.info(f'正在抓取: {rss_url}')
-            headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
-            req = urllib.request.Request(rss_url, headers=headers)
-            
-            with urllib.request.urlopen(req, timeout=30) as response:
-                rss_content = response.read().decode('utf-8')
-            
-            # 使用正则提取文章，因为RDF格式解析复杂
-            articles = []
-            seen_urls = set()
-            
-            # 提取所有 item 块
-            item_pattern = re.compile(r'<item[^>]*>(.*?)</item>', re.DOTALL)
-            title_pattern = re.compile(r'<title[^>]*>(.*?)</title>', re.DOTALL)
-            link_pattern = re.compile(r'<link[^>]*>(.*?)</link>', re.DOTALL)
-            
-            items = item_pattern.findall(rss_content)
-            
-            for item in items:
-                title_match = title_pattern.search(item)
-                link_match = link_pattern.search(item)
-                
-                if title_match and link_match:
-                    title = title_match.group(1).strip()
-                    url = link_match.group(1).strip()
-                    
-                    # 清理CDATA
-                    title = re.sub(r'<!\[CDATA\[(.*?)\]\]>', r'\1', title)
-                    
-                    if not title or not url or len(title) < 5:
-                        continue
-                    
-                    if url in seen_urls:
-                        continue
-                    
-                    seen_urls.add(url)
-                    articles.append({
-                        'title': title,
-                        'url': url,
-                        'date': '',
-                        'description': ''
-                    })
-                    
-                    if len(articles) >= self.max_articles_per_feed:
-                        break
-            
-            if articles:
-                feeds.append(('德国之声中文网', articles))
-                self.log.info(f'✅ 成功抓取 {len(articles)} 篇文章')
-            else:
-                self.log.warning('⚠️ 未抓到任何文章')
-                
-        except Exception as e:
-            self.log.error(f'❌ 解析RSS失败: {str(e)}')
-            import traceback
-            self.log.error(traceback.format_exc())
-        
-        return feeds
 
     def preprocess_html(self, soup):
         for img in soup.find_all('img'):
