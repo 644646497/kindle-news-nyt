@@ -9,7 +9,7 @@ import subprocess
 import urllib.request
 import xml.etree.ElementTree as ET
 from io import BytesIO
-from PIL import Image, ImageDraw, ImageFont  # 统一在这里导入
+from PIL import Image, ImageDraw, ImageFont
 from calibre.web.feeds.news import BasicNewsRecipe
 
 try:
@@ -73,6 +73,52 @@ class NytimesRecipe(BasicNewsRecipe):
         dict(name='div', attrs={'id': re.compile(r'ad|share|related|comment|sidebar|tags|meta|social', re.I)}),
     ]
 
+    # CSS 作为类属性，不是方法
+    extra_css = '''
+        body { 
+            font-family: "Noto Sans CJK SC", "PingFang SC", "Microsoft YaHei", sans-serif;
+            line-height: 1.8;
+            font-size: 16px;
+            color: #333;
+            max-width: 700px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        h1 { 
+            font-size: 24px; 
+            font-weight: bold; 
+            margin: 20px 0 10px 0;
+            color: #1a1a2e;
+            line-height: 1.4;
+        }
+        h2 { 
+            font-size: 20px; 
+            font-weight: bold; 
+            margin: 15px 0 8px 0;
+            color: #2d2d44;
+        }
+        p { 
+            margin: 10px 0; 
+            text-indent: 2em;
+            text-align: justify;
+        }
+        img {
+            max-width: 100%;
+            height: auto;
+            display: block;
+            margin: 10px auto;
+        }
+        .article-content {
+            padding: 10px 0;
+        }
+        blockquote {
+            border-left: 4px solid #e94560;
+            padding-left: 20px;
+            margin-left: 20px;
+            color: #555;
+        }
+    '''
+
     def parse_index(self):
         """使用标准XML解析器解析RSS，避免命名空间问题"""
         feeds = []
@@ -94,7 +140,7 @@ class NytimesRecipe(BasicNewsRecipe):
                 # 解析XML
                 root = ET.fromstring(rss_content)
                 
-                # 查找所有item（兼容命名空间）
+                # 查找所有item
                 items = []
                 for child in root.iter():
                     if child.tag.endswith('item'):
@@ -257,56 +303,16 @@ class NytimesRecipe(BasicNewsRecipe):
             img.save(cover_bytes, 'JPEG', quality=85)
             cover_bytes.seek(0)
             
-            # 返回图片数据（作为 bytes）
+            # 返回图片数据
             return cover_bytes.getvalue()
             
         except Exception as e:
             self.log.error(f'生成封面失败: {e}')
             return None
 
-    def extra_css(self):
-        """自定义CSS样式 - 注意：这是一个方法，返回字符串"""
-        return '''
-        body { 
-            font-family: "Noto Sans CJK SC", "PingFang SC", "Microsoft YaHei", sans-serif;
-            line-height: 1.8;
-            font-size: 16px;
-            color: #333;
-            max-width: 700px;
-            margin: 0 auto;
-            padding: 20px;
-        }
-        h1 { 
-            font-size: 24px; 
-            font-weight: bold; 
-            margin: 20px 0 10px 0;
-            color: #1a1a2e;
-            line-height: 1.4;
-        }
-        h2 { 
-            font-size: 20px; 
-            font-weight: bold; 
-            margin: 15px 0 8px 0;
-            color: #2d2d44;
-        }
-        p { 
-            margin: 10px 0; 
-            text-indent: 2em;
-            text-align: justify;
-        }
-        img {
-            max-width: 100%;
-            height: auto;
-            display: block;
-            margin: 10px auto;
-        }
-        .article-content {
-            padding: 10px 0;
-        }
-        blockquote {
-            border-left: 4px solid #e94560;
-            padding-left: 20px;
-            margin-left: 20px;
-            color: #555;
-        }
-        '''
+    def cover(self):
+        """备用封面方法 - 如果 get_cover_url 失败"""
+        try:
+            return self.get_cover_url()
+        except:
+            return None
