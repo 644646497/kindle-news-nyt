@@ -1,6 +1,6 @@
 name: Send to Kindle
 
-#on:
+on:
   schedule:
     - cron: '0 13 * * *'
   workflow_dispatch:
