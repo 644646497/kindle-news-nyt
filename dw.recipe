@@ -48,19 +48,30 @@ class DWRecipe(BasicNewsRecipe):
     compress_news_images = True
     scale_news_images_to = 600
     
+    # 使用 Calibre 的自动文章提取
+    extract_article = True
+    
     # 使用 feeds
     feeds = [
         ('德国之声中文网', 'https://rss.dw.com/rdf/rss-zh')
     ]
     
-    # 不使用 keep_only_tags，用 remove_tags 移除干扰
+    # 只保留核心内容
+    keep_only_tags = [
+        dict(name='div', attrs={'class': re.compile(r'content|article|story|post|entry|body|text', re.I)}),
+        dict(name='div', attrs={'itemprop': 'articleBody'}),
+        dict(name='article'),
+        dict(name='main'),
+        dict(name='section', attrs={'class': re.compile(r'content|article|story', re.I)}),
+    ]
+
     remove_tags = [
         dict(name='script'), dict(name='style'), dict(name='iframe'),
         dict(name='nav'), dict(name='header'), dict(name='footer'),
         dict(name='aside'),
-        dict(name='div', attrs={'class': re.compile(r'ad|advertisement|sponsor|promo|banner|share|social|related|recommend', re.I)}),
-        dict(name='div', attrs={'id': re.compile(r'ad|advertisement|sponsor|promo|banner|share|social|related|recommend', re.I)}),
-        dict(name='div', attrs={'class': re.compile(r'comment|discussion|response|tag|meta', re.I)}),
+        dict(name='div', attrs={'class': re.compile(r'ad|advertisement|sponsor|promo|banner|share|social|related|recommend|sidebar|breadcrumb', re.I)}),
+        dict(name='div', attrs={'id': re.compile(r'ad|advertisement|sponsor|promo|banner|share|social|related|recommend|sidebar|breadcrumb', re.I)}),
+        dict(name='div', attrs={'class': re.compile(r'comment|discussion|response|tag|meta|copyright', re.I)}),
     ]
 
     extra_css = '''
@@ -116,29 +127,17 @@ class DWRecipe(BasicNewsRecipe):
                     src = 'https://www.dw.com' + src
                 img['src'] = src
         
-        # 尝试找到文章主体 - 德国之声的文章通常在 div 中
-        # 如果找到了 article 或 content 容器，保留它
-        article_body = None
+        # 德国之声特定处理：尝试找到文章内容的容器
+        # 常见的是 class="text" 或 id="text"
+        text_container = soup.find('div', class_='text') or soup.find('div', id='text')
+        if text_container:
+            # 如果找到了 text 容器，只保留它
+            soup = text_container
         
-        # 尝试常见的选择器
-        selectors = [
-            ('div', {'class': re.compile(r'article-content|story-content|entry-content|post-content', re.I)}),
-            ('div', {'class': re.compile(r'content|article-body|story-body', re.I)}),
-            ('div', {'itemprop': 'articleBody'}),
-            ('article', {}),
-        ]
-        
-        for tag_name, attrs in selectors:
-            if attrs:
-                article_body = soup.find(tag_name, attrs=attrs)
-            else:
-                article_body = soup.find(tag_name)
-            if article_body:
-                break
-        
-        if article_body:
-            # 只保留文章主体
-            soup = article_body
+        # 另一种常见结构
+        article_container = soup.find('div', class_='article-content') or soup.find('div', id='article-content')
+        if article_container:
+            soup = article_container
         
         return soup
 
@@ -150,6 +149,4 @@ class DWRecipe(BasicNewsRecipe):
                 title = title_tag.get_text(strip=True)
                 title = re.sub(r'\s*[|•-]\s*德国之声.*$', '', title).strip()
                 title = re.sub(r'^DW\s*[|•-]\s*', '', title).strip()
-                if title and len(title) > 5:
-                    new_h1 = soup.new_tag('h1')
-         
+        
