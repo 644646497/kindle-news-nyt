@@ -59,21 +59,48 @@ class NytimesRecipe(BasicNewsRecipe):
     keep_only_tags = [
         dict(name='h1'),
         dict(name='article', attrs={'class': re.compile(r'article-content')}),
-        dict(name='div', attrs={'class': re.compile(r'article-body|article-content|story-body|entry-content|post-content')}),
-        dict(name='div', attrs={'class': re.compile(r'content|main-content', re.I)}),
+        dict(name='div', attrs={'class': re.compile(r'article-body|article-content|story-body|entry-content|post-content|main-content')}),
+        dict(name='div', attrs={'class': re.compile(r'content|main', re.I)}),
         dict(name='article'),
         dict(name='main'),
+        dict(name='div', attrs={'id': re.compile(r'content|article|main', re.I)}),
     ]
 
     remove_tags = [
+        # 移除脚本和样式
         dict(name='script'), dict(name='style'), dict(name='iframe'),
+        # 移除导航和页脚
         dict(name='nav'), dict(name='header'), dict(name='footer'),
         dict(name='aside'),
-        dict(name='div', attrs={'class': re.compile(r'ad|share|related|comment|sidebar|tags|meta|social|popup|overlay|newsletter', re.I)}),
-        dict(name='div', attrs={'id': re.compile(r'ad|share|related|comment|sidebar|tags|meta|social', re.I)}),
+        # 移除广告和社交媒体
+        dict(name='div', attrs={'class': re.compile(r'ad|advertisement|sponsor|promo|banner', re.I)}),
+        dict(name='div', attrs={'id': re.compile(r'ad|advertisement|sponsor|promo|banner', re.I)}),
+        # 移除分享按钮
+        dict(name='div', attrs={'class': re.compile(r'share|social|twitter|facebook|wechat|weibo', re.I)}),
+        dict(name='div', attrs={'id': re.compile(r'share|social|twitter|facebook|wechat|weibo', re.I)}),
+        # 移除相关文章推荐
+        dict(name='div', attrs={'class': re.compile(r'related|recommend|suggestion|more|popular|trending', re.I)}),
+        dict(name='div', attrs={'id': re.compile(r'related|recommend|suggestion|more|popular|trending', re.I)}),
+        dict(name='section', attrs={'class': re.compile(r'related|recommend|suggestion|more|popular|trending', re.I)}),
+        # 移除评论
+        dict(name='div', attrs={'class': re.compile(r'comment|discussion|response', re.I)}),
+        dict(name='div', attrs={'id': re.compile(r'comment|discussion|response', re.I)}),
+        # 移除标签和元数据
+        dict(name='div', attrs={'class': re.compile(r'tag|meta|copyright|disclaimer', re.I)}),
+        dict(name='div', attrs={'id': re.compile(r'tag|meta|copyright|disclaimer', re.I)}),
+        # 移除订阅和新闻简报
+        dict(name='div', attrs={'class': re.compile(r'newsletter|subscribe|signup|email', re.I)}),
+        dict(name='div', attrs={'id': re.compile(r'newsletter|subscribe|signup|email', re.I)}),
+        # 移除作者信息（保留在文章开头即可）
+        dict(name='div', attrs={'class': re.compile(r'byline|author|bio|credit', re.I)}),
+        # 移除列表中的额外文章
+        dict(name='ul', attrs={'class': re.compile(r'related|recommend', re.I)}),
+        dict(name='ol', attrs={'class': re.compile(r'related|recommend', re.I)}),
+        # 移除下载信息
+        dict(name='div', attrs={'class': re.compile(r'download|powered|calibre', re.I)}),
     ]
 
-    # CSS 作为类属性，不是方法
+    # CSS 样式
     extra_css = '''
         body { 
             font-family: "Noto Sans CJK SC", "PingFang SC", "Microsoft YaHei", sans-serif;
@@ -120,7 +147,7 @@ class NytimesRecipe(BasicNewsRecipe):
     '''
 
     def parse_index(self):
-        """使用标准XML解析器解析RSS，避免命名空间问题"""
+        """解析RSS获取文章列表"""
         feeds = []
         sections = [
             ('纽约时报中文网', 'https://cn.nytimes.com/rss/'),
@@ -130,17 +157,14 @@ class NytimesRecipe(BasicNewsRecipe):
             try:
                 self.log.info(f'正在抓取: {section_url}')
                 
-                # 获取RSS内容
                 headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
                 req = urllib.request.Request(section_url, headers=headers)
                 
                 with urllib.request.urlopen(req, timeout=30) as response:
                     rss_content = response.read().decode('utf-8')
                 
-                # 解析XML
                 root = ET.fromstring(rss_content)
                 
-                # 查找所有item
                 items = []
                 for child in root.iter():
                     if child.tag.endswith('item'):
@@ -207,7 +231,9 @@ class NytimesRecipe(BasicNewsRecipe):
         return feeds
 
     def preprocess_html(self, soup):
-        """预处理HTML：修复图片链接"""
+        """预处理HTML：修复图片链接和清理无关内容"""
+        
+        # 修复图片链接
         for img in soup.find_all('img'):
             real_src = img.get('data-src') or img.get('data-original') or img.get('src', '')
             if real_src:
@@ -217,8 +243,33 @@ class NytimesRecipe(BasicNewsRecipe):
                     real_src = 'https://cn.nytimes.com' + real_src
                 img['src'] = real_src
         
-        for tag in soup.find_all('div', class_=re.compile(r'ad|share|social|promo', re.I)):
-            tag.decompose()
+        # 移除包含"下载"或"calibre"的div
+        for div in soup.find_all('div'):
+            if div.get('class'):
+                class_text = ' '.join(div.get('class', []))
+                if 'download' in class_text.lower() or 'powered' in class_text.lower():
+                    div.decompose()
+            if div.string and 'downloaded by calibre' in str(div.string).lower():
+                div.decompose()
+        
+        # 移除文章末尾的推荐列表
+        for div in soup.find_all(['div', 'section', 'ul', 'ol']):
+            class_text = ' '.join(div.get('class', [])) if div.get('class') else ''
+            id_text = div.get('id', '')
+            combined = (class_text + ' ' + id_text).lower()
+            
+            if any(keyword in combined for keyword in ['related', 'recommend', 'suggestion', 'more-news', 'popular', 'trending', 'most-read']):
+                div.decompose()
+        
+        # 移除包含文章列表的容器
+        for div in soup.find_all('div', class_=re.compile(r'container|wrapper|list', re.I)):
+            # 检查是否包含多个文章链接
+            links = div.find_all('a')
+            if len(links) > 3:
+                # 检查链接是否像文章标题
+                article_links = [l for l in links if len(l.get_text(strip=True)) > 15]
+                if len(article_links) > 2:
+                    div.decompose()
         
         return soup
 
@@ -250,7 +301,6 @@ class NytimesRecipe(BasicNewsRecipe):
 
             font_path = FONT_PATH
             
-            # 设置字体
             try:
                 if font_path and os.path.exists(font_path):
                     font_large = ImageFont.truetype(font_path, 72)
@@ -265,15 +315,12 @@ class NytimesRecipe(BasicNewsRecipe):
                 font_medium = ImageFont.load_default()
                 font_small = ImageFont.load_default()
 
-            # 绘制装饰线
             draw.rectangle([(50, 200), (550, 205)], fill=accent_color)
             
-            # 绘制标题
             title_text = '纽约时报'
             subtitle_text = '中文网'
             date_text = datetime.datetime.now().strftime('%Y年%m月%d日')
             
-            # 居中绘制标题
             try:
                 bbox = draw.textbbox((0, 0), title_text, font=font_large)
                 title_width = bbox[2] - bbox[0]
@@ -294,25 +341,15 @@ class NytimesRecipe(BasicNewsRecipe):
                 
             except Exception as e:
                 print(f'封面绘制错误: {e}')
-                # 备用方案：简单文本
                 draw.text((50, 300), '纽约时报中文网', fill=text_color, font=font_large)
                 draw.text((50, 400), date_text, fill=text_color, font=font_small)
 
-            # 保存为字节流
             cover_bytes = BytesIO()
             img.save(cover_bytes, 'JPEG', quality=85)
             cover_bytes.seek(0)
             
-            # 返回图片数据
             return cover_bytes.getvalue()
             
         except Exception as e:
             self.log.error(f'生成封面失败: {e}')
-            return None
-
-    def cover(self):
-        """备用封面方法 - 如果 get_cover_url 失败"""
-        try:
-            return self.get_cover_url()
-        except:
             return None
