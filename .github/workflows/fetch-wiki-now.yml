@@ -17,7 +17,7 @@ jobs:
       - name: Fetch and Convert to Simplified
         run: |
           # 【极简版】：以后想加什么词条，直接用中文逗号隔开写在这里就行！
-          ARTICLES="习近平"
+          ARTICLES="黑洞"
           
           mkdir -p wiki_pages
           
