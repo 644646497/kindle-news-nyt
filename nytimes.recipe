@@ -50,15 +50,16 @@ class NytimesRecipe(BasicNewsRecipe):
     compress_news_images = True
     scale_news_images_to = 600
     
-    # 不使用 keep_only_tags，让内容完整保留
-    # 使用 remove_tags 移除不需要的部分
-    
+    # 只移除明确的广告和干扰元素，保留标题
     remove_tags = [
         dict(name='script'), dict(name='style'), dict(name='iframe'),
         dict(name='nav'), dict(name='header'), dict(name='footer'), 
         dict(name='aside'), dict(name='form'),
-        dict(name='div', attrs={'class': re.compile(r'ad|advertisement|sponsor|promo|banner|social|share|comment|related', re.I)}),
-        dict(name='div', attrs={'id': re.compile(r'ad|advertisement|sponsor|promo|banner|social|share|comment|related', re.I)}),
+        # 只移除明确的广告
+        dict(name='div', attrs={'class': re.compile(r'^ad$|^advertisement$|^sponsor$|^promo$|^banner$', re.I)}),
+        dict(name='div', attrs={'id': re.compile(r'^ad$|^advertisement$|^sponsor$|^promo$|^banner$', re.I)}),
+        # 移除社交媒体分享按钮（但保留内容）
+        dict(name='div', attrs={'class': re.compile(r'^social-share$|^share-buttons$', re.I)}),
     ]
 
     extra_css = '''
@@ -71,10 +72,41 @@ class NytimesRecipe(BasicNewsRecipe):
             margin: 0 auto;
             padding: 20px;
         }
-        h1 { font-size: 24px; font-weight: bold; margin: 20px 0 10px 0; color: #1a1a2e; }
-        p { margin: 10px 0; text-indent: 2em; text-align: justify; }
-        img { max-width: 100%; height: auto; display: block; margin: 10px auto; }
-        blockquote { border-left: 4px solid #e94560; padding-left: 20px; margin-left: 20px; color: #555; }
+        h1 { 
+            font-size: 24px; 
+            font-weight: bold; 
+            margin: 20px 0 10px 0;
+            color: #1a1a2e;
+            line-height: 1.4;
+        }
+        h2 { 
+            font-size: 20px; 
+            font-weight: bold; 
+            margin: 15px 0 8px 0;
+            color: #2d2d44;
+        }
+        p { 
+            margin: 10px 0; 
+            text-indent: 2em;
+            text-align: justify;
+        }
+        img { 
+            max-width: 100%; 
+            height: auto; 
+            display: block; 
+            margin: 10px auto; 
+        }
+        .article-meta {
+            color: #666;
+            font-size: 14px;
+            margin: 10px 0;
+        }
+        blockquote { 
+            border-left: 4px solid #e94560; 
+            padding-left: 20px; 
+            margin-left: 20px; 
+            color: #555; 
+        }
     '''
 
     def parse_index(self):
@@ -149,7 +181,7 @@ class NytimesRecipe(BasicNewsRecipe):
         return feeds
 
     def preprocess_html(self, soup):
-        """预处理：修复图片链接，保留文章主体"""
+        """预处理：修复图片链接"""
         
         # 修复图片
         for img in soup.find_all('img'):
@@ -161,16 +193,12 @@ class NytimesRecipe(BasicNewsRecipe):
                     src = 'https://cn.nytimes.com' + src
                 img['src'] = src
         
-        # 移除广告
-        for div in soup.find_all('div', class_=re.compile(r'ad|advertisement|sponsor|promo', re.I)):
-            div.decompose()
-        
         return soup
 
     def postprocess_html(self, soup, first_fetch):
         """后处理：清理推荐内容和简繁转换"""
         
-        # 1. 移除推荐阅读容器
+        # 1. 移除推荐阅读容器（但保留标题）
         for div in soup.find_all(['div', 'section', 'ul', 'ol', 'aside']):
             # 检查class和id
             classes = ' '.join(div.get('class', [])).lower()
@@ -188,7 +216,7 @@ class NytimesRecipe(BasicNewsRecipe):
                 div.decompose()
                 continue
         
-        # 2. 移除文章末尾的推荐列表（查找最后一个段落后的列表）
+        # 2. 移除文章末尾的推荐列表（但保留标题）
         paragraphs = soup.find_all('p')
         if len(paragraphs) > 2:
             last_p = paragraphs[-1]
@@ -204,7 +232,20 @@ class NytimesRecipe(BasicNewsRecipe):
             if elem.parent:
                 elem.parent.decompose()
         
-        # 4. 简繁转换
+        # 4. 确保标题存在
+        # 如果找不到 h1，尝试从其他元素提取标题
+        if not soup.find('h1'):
+            # 尝试找 h2 或 h3
+            for tag in ['h2', 'h3', 'h4']:
+                header = soup.find(tag)
+                if header:
+                    # 转换为 h1
+                    new_h1 = soup.new_tag('h1')
+                    new_h1.string = header.get_text()
+                    header.replace_with(new_h1)
+                    break
+        
+        # 5. 简繁转换
         if CAN_CONVERT:
             for elem in soup.find_all(string=True):
                 text = str(elem)
