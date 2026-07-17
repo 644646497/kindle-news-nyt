@@ -1,177 +1,164 @@
 #!/usr/bin/env python
-# vim:fileencoding=utf-8
-from __future__ import unicode_literals, division, absolute_import, print_function
+# -*- coding: utf-8 -*-
 import re
-import datetime
+import requests
+from bs4 import BeautifulSoup
+from datetime import datetime, timezone
+from opencc import OpenCC
 import time
-import os
-import subprocess
-from io import BytesIO
-from PIL import Image, ImageDraw, ImageFont
-from calibre.web.feeds.news import BasicNewsRecipe
 
-try:
-    from opencc import OpenCC
-    cc = OpenCC('t2s')
-    CAN_CONVERT = True
-except ImportError:
-    CAN_CONVERT = False
+cc = OpenCC('t2s')
 
-# --- 1. 环境初始化：自动安装中文字体 ---
-def ensure_chinese_font():
-    font_paths = [
-        "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
-        "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc"
-    ]
+# 纽约时报中文网官方 RSS（作为文章列表来源）
+RSS_URL = 'https://cn.nytimes.com/rss/'
+OUTPUT_FILE = 'nytimes_feed.xml'
 
-    for path in font_paths:
-        if os.path.exists(path):
-            return path
-
-    print(">>> 未检测到中文字体，正在尝试安装...")
-    try:
-        subprocess.run(["sudo", "apt-get", "update"], check=True, capture_output=True)
-        subprocess.run(["sudo", "apt-get", "install", "-y", "fonts-noto-cjk"], check=True, capture_output=True)
-        subprocess.run(["fc-cache", "-f"], check=True, capture_output=True)
-        for path in font_paths:
-            if os.path.exists(path):
-                return path
-    except Exception as e:
-        print(f">>> 安装字体失败: {e}")
-
-    return None
-
-FONT_PATH = ensure_chinese_font()
-
-class NytimesRecipe(BasicNewsRecipe):
-    title = '纽约时报中文网 - ' + datetime.datetime.now().strftime('%Y-%m-%d %H:%M')
-    language = 'zh-CN'
-    oldest_article = 1
-    max_articles_per_feed = 20
-    auto_cleanup = True
-    no_stylesheets = False
-    remove_javascript = True
-    compress_news_images = True
-    scale_news_images_to = 600
-
-    keep_only_tags = [
-        dict(name='h1'),
-        dict(name='article', attrs={'class': re.compile(r'article-content')}),
-        dict(name='div', attrs={'class': re.compile(r'article-body|article-content|story-body')}),
-        dict(name='article'),
-    ]
-
-    remove_tags = [
-        dict(name='script'), dict(name='style'), dict(name='iframe'),
-        dict(name='nav'), dict(name='header'), dict(name='footer'),
-        dict(name='aside'),
-        dict(name='div', attrs={'class': re.compile(r'ad|share|related|comment|sidebar|tags|meta', re.I)}),
-    ]
-
-    def parse_index(self):
-        feeds = []
-        sections = [('纽约时报中文网', 'https://cn.nytimes.com/rss/')]
-
-        for section_name, section_url in sections:
-            try:
-                soup = self.index_to_soup(section_url)
-                articles = []
-                seen_urls = set()
-
-                for item in soup.find_all('item'):
-                    title_tag = item.find('title')
-                    link_tag = item.find('link')
-                    if title_tag and link_tag:
-                        title = title_tag.get_text(strip=True)
-                        url = link_tag.get_text(strip=True)
-                        if title and len(title) > 5 and url not in seen_urls:
-                            seen_urls.add(url)
-                            articles.append({'title': title, 'url': url, 'date': '', 'description': ''})
-                        if len(articles) >= self.max_articles_per_feed:
-                            break
-
-                if articles:
-                    feeds.append((section_name, articles))
-            except Exception as e:
-                self.log.error(str(e))
-
-        return feeds
-
-    def preprocess_html(self, soup):
-        for img in soup.find_all('img'):
-            real_src = img.get('data-src') or img.get('data-original') or img.get('src', '')
-            if real_src:
-                if real_src.startswith('//'):
-                    real_src = 'https:' + real_src
-                elif real_src.startswith('/'):
-                    real_src = 'https://cn.nytimes.com' + real_src
-                img['src'] = real_src
-        for tag in soup.find_all('div', class_=re.compile(r'ad|share|social', re.I)):
-            tag.decompose()
-        return soup
-
-    def postprocess_html(self, soup, first_fetch):
-        if CAN_CONVERT:
-            for element in soup.find_all(string=True):
-                text = str(element)
-                if len(text) > 3:
-                    if element.parent and element.parent.name not in ['script', 'style']:
-                        try:
-                            converted = cc.convert(text)
-                            if converted != text:
-                                element.replace_with(converted)
-                        except Exception:
-                            pass
-        return soup
-
-    def get_cover_url(self):
-        width, height = 600, 800
-        background_color = '#FFFFFF'
-        text_color = '#000000'
-
-        img = Image.new('RGB', (width, height), color=background_color)
-        draw = ImageDraw.Draw(img)
-
-        font_path = FONT_PATH
-        font_large_size = 80
-        font_small_size = 40
-
+def fetch_with_retry(url, max_retries=3):
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+    }
+    for i in range(max_retries):
         try:
-            if font_path:
-                font_large = ImageFont.truetype(font_path, font_large_size)
-                font_small = ImageFont.truetype(font_path, font_small_size)
+            resp = requests.get(url, headers=headers, timeout=30)
+            resp.raise_for_status()
+            return resp
+        except Exception as e:
+            if i == max_retries - 1:
+                raise
+            time.sleep(2)
+
+def extract_article_and_date(html):
+    """提取正文和发布日期"""
+    soup = BeautifulSoup(html, 'html.parser')
+    
+    # 1. 提取发布时间
+    pub_date = None
+    time_tag = soup.find('time')
+    if time_tag:
+        pub_date = time_tag.get('datetime') or time_tag.get_text(strip=True)
+    if not pub_date:
+        meta_tag = soup.find('meta', {'name': re.compile(r'date|pubdate|publish', re.I)})
+        if meta_tag:
+            pub_date = meta_tag.get('content')
+    
+    # 2. 清理正文
+    for tag in soup(['script', 'style', 'nav', 'header', 'footer', 'aside', 'iframe']):
+        tag.decompose()
+    
+    # 纽约时报中文网的正文容器
+    article = soup.find('article', class_='article-content') or soup.find('article') or soup.find('div', class_='article-body')
+    if not article:
+        article = soup.body
+    
+    paragraphs = article.find_all('p')
+    if not paragraphs:
+        text = soup.get_text(strip=True)
+    else:
+        valid_paragraphs = [p.get_text(strip=True) for p in paragraphs if len(p.get_text(strip=True)) > 30]
+        text = '\n\n'.join(valid_paragraphs)
+        text = re.sub(r'\n\s*\n', '\n\n', text)
+    
+    # 3. 格式化日期
+    if pub_date:
+        try:
+            match = re.search(r'(\d{4})[-/](\d{1,2})[-/](\d{1,2})', pub_date)
+            if match:
+                year, month, day = match.groups()
+                time_match = re.search(r'(\d{1,2}):(\d{1,2}):?(\d{0,2})', pub_date)
+                if time_match:
+                    hour, minute, second = time_match.groups()
+                    second = second if second else '00'
+                    dt = datetime(int(year), int(month), int(day), int(hour), int(minute), int(second))
+                else:
+                    dt = datetime(int(year), int(month), int(day))
+                pub_date = dt.strftime('%a, %d %b %Y %H:%M:%S +0800')
+        except:
+            pass
+    else:
+        pub_date = datetime.now().strftime('%a, %d %b %Y %H:%M:%S +0800')
+    
+    return text, pub_date
+
+def fetch_and_convert():
+    print(f"抓取纽约时报中文网 RSS: {RSS_URL}")
+    resp = fetch_with_retry(RSS_URL)
+    soup = BeautifulSoup(resp.text, 'html.parser')
+    
+    # 从 RSS 中提取文章链接
+    links = []
+    for item in soup.find_all('item'):
+        title_tag = item.find('title')
+        link_tag = item.find('link')
+        if title_tag and link_tag:
+            title = title_tag.get_text(strip=True)
+            url = link_tag.get_text(strip=True)
+            if title and len(title) > 5:
+                links.append({'url': url, 'title': title})
+    
+    # 去重，取前15篇
+    seen = set()
+    unique_links = []
+    for link in links:
+        if link['url'] not in seen:
+            seen.add(link['url'])
+            unique_links.append(link)
+    unique_links = unique_links[:15]
+    
+    print(f"找到 {len(unique_links)} 篇文章")
+    
+    rss_items = []
+    for idx, link in enumerate(unique_links):
+        print(f"[{idx+1}] 处理: {link['title'][:50]}...")
+        try:
+            article_resp = fetch_with_retry(link['url'])
+            raw_text, pub_date = extract_article_and_date(article_resp.text)
+            cleaned = cc.convert(raw_text)
+            if len(cleaned) < 100:
+                print(f"  ⚠ 正文过短({len(cleaned)}字)")
             else:
-                font_large = ImageFont.load_default()
-                font_small = ImageFont.load_default()
-        except Exception:
-            font_large = ImageFont.load_default()
-            font_small = ImageFont.load_default()
+                print(f"  ✓ 正文长度: {len(cleaned)} 字符")
+            print(f"  📅 发布日期: {pub_date}")
+        except Exception as e:
+            print(f"  ❌ 出错: {e}")
+            cleaned = ""
+            pub_date = datetime.now(timezone.utc).strftime('%a, %d %b %Y %H:%M:%S GMT')
+        
+        rss_items.append({
+            'title': cc.convert(link['title']),
+            'link': link['url'],
+            'description': cleaned,
+            'pubDate': pub_date,
+            'guid': link['url'],
+        })
+    
+    # 生成 XML
+    xml = '<?xml version="1.0" encoding="UTF-8"?>\n<rss version="2.0">\n<channel>\n'
+    xml += '  <title>纽约时报中文网 RSS（简体/全文）</title>\n'
+    xml += '  <link>https://cn.nytimes.com/</link>\n'
+    xml += '  <description>纽约时报中文网全文抓取、繁转简</description>\n'
+    xml += f'  <lastBuildDate>{datetime.now(timezone.utc).strftime("%a, %d %b %Y %H:%M:%S GMT")}</lastBuildDate>\n'
+    
+    for item in rss_items:
+        xml += '  <item>\n'
+        xml += f'    <title>{escape_xml(item["title"])}</title>\n'
+        xml += f'    <link>{item["link"]}</link>\n'
+        xml += f'    <guid>{item["guid"]}</guid>\n'
+        xml += f'    <pubDate>{item["pubDate"]}</pubDate>\n'
+        xml += f'    <description><![CDATA[{item["description"]}]]></description>\n'
+        xml += '  </item>\n'
+    
+    xml += '</channel>\n</rss>'
+    
+    with open(OUTPUT_FILE, 'w', encoding='utf-8') as f:
+        f.write(xml)
+    
+    print(f"\n✅ 完成！已生成 {len(rss_items)} 篇 -> {OUTPUT_FILE}")
 
-        title_text = "纽约时报"
-        try:
-            bbox = draw.textbbox((0, 0), title_text, font=font_large)
-            text_width = bbox[2] - bbox[0]
-            x = (width - text_width) / 2
-            y = height * 0.4
-            draw.text((x, y), title_text, fill=text_color, font=font_large)
-        except Exception:
-            pass
+def escape_xml(text):
+    if not text:
+        return ''
+    return text.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
 
-        now_str = datetime.datetime.now().strftime('%Y-%m-%d %H:%M')
-        try:
-            bbox_time = draw.textbbox((0, 0), now_str, font=font_small)
-            time_width = bbox_time[2] - bbox_time[0]
-            x_time = (width - time_width) / 2
-            y_time = height * 0.6
-            draw.text((x_time, y_time), now_str, fill=text_color, font=font_small)
-        except Exception:
-            pass
-
-        cover_path = os.path.join(os.getcwd(), 'cover.png')
-        img.save(cover_path)
-        return cover_path
-
-
-if __name__ == "__main__":
-    from calibre.web.feeds.recipes.utils import cli
-    cli(NytimesRecipe)
+if __name__ == '__main__':
+    fetch_and_convert()
