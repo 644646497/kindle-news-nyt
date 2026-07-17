@@ -50,16 +50,14 @@ class NytimesRecipe(BasicNewsRecipe):
     compress_news_images = True
     scale_news_images_to = 600
     
-    # 只移除明确的广告和干扰元素，保留标题
+    # 不清除任何内容，只移除明确的脚本和样式
     remove_tags = [
-        dict(name='script'), dict(name='style'), dict(name='iframe'),
-        dict(name='nav'), dict(name='header'), dict(name='footer'), 
-        dict(name='aside'), dict(name='form'),
-        # 只移除明确的广告
-        dict(name='div', attrs={'class': re.compile(r'^ad$|^advertisement$|^sponsor$|^promo$|^banner$', re.I)}),
-        dict(name='div', attrs={'id': re.compile(r'^ad$|^advertisement$|^sponsor$|^promo$|^banner$', re.I)}),
-        # 移除社交媒体分享按钮（但保留内容）
-        dict(name='div', attrs={'class': re.compile(r'^social-share$|^share-buttons$', re.I)}),
+        dict(name='script'), 
+        dict(name='style'), 
+        dict(name='iframe'),
+        dict(name='nav'), 
+        dict(name='header'), 
+        dict(name='footer'),
     ]
 
     extra_css = '''
@@ -124,7 +122,6 @@ class NytimesRecipe(BasicNewsRecipe):
             
             root = ET.fromstring(rss_content)
             
-            # 获取所有 item
             items = []
             for child in root.iter():
                 if child.tag.endswith('item'):
@@ -198,15 +195,15 @@ class NytimesRecipe(BasicNewsRecipe):
     def postprocess_html(self, soup, first_fetch):
         """后处理：清理推荐内容和简繁转换"""
         
-        # 1. 移除推荐阅读容器（但保留标题）
+        # 1. 移除推荐阅读容器（只移除明确包含推荐内容的容器）
         for div in soup.find_all(['div', 'section', 'ul', 'ol', 'aside']):
             # 检查class和id
             classes = ' '.join(div.get('class', [])).lower()
             div_id = div.get('id', '').lower()
-            combined = classes + ' ' + div_id
             
-            # 移除包含推荐关键词的容器
-            if any(k in combined for k in ['related', 'recommend', 'suggestion', 'popular', 'trending', 'most-read']):
+            # 精确匹配推荐关键词（使用单词边界）
+            if re.search(r'\brelated\b|\brecommend\b|\bsuggestion\b|\bpopular\b|\btrending\b|\bmost-read\b', classes) or \
+               re.search(r'\brelated\b|\brecommend\b|\bsuggestion\b|\bpopular\b|\btrending\b|\bmost-read\b', div_id):
                 div.decompose()
                 continue
             
@@ -216,34 +213,33 @@ class NytimesRecipe(BasicNewsRecipe):
                 div.decompose()
                 continue
         
-        # 2. 移除文章末尾的推荐列表（但保留标题）
+        # 2. 查找文章末尾的推荐列表
+        # 找到所有段落
         paragraphs = soup.find_all('p')
-        if len(paragraphs) > 2:
-            last_p = paragraphs[-1]
-            # 检查后面的兄弟元素
-            for sibling in list(last_p.find_next_siblings()):
-                if sibling.name in ['div', 'section', 'ul', 'ol']:
-                    links = sibling.find_all('a')
-                    if len(links) >= 3:
-                        sibling.decompose()
+        if len(paragraphs) >= 2:
+            # 从倒数第二个段落开始检查
+            for i in range(len(paragraphs) - 1, max(0, len(paragraphs) - 3), -1):
+                p = paragraphs[i]
+                # 检查这个段落后面的兄弟元素
+                for sibling in list(p.find_next_siblings()):
+                    if sibling.name in ['div', 'section', 'ul', 'ol']:
+                        # 检查是否包含多个链接
+                        links = sibling.find_all('a')
+                        if len(links) >= 3:
+                            # 检查链接文本是否像文章标题（长度>10）
+                            long_links = [l for l in links if len(l.get_text(strip=True)) > 10]
+                            if len(long_links) >= 2:
+                                sibling.decompose()
         
         # 3. 移除下载信息
         for elem in soup.find_all(string=re.compile(r'downloaded by calibre', re.I)):
             if elem.parent:
                 elem.parent.decompose()
         
-        # 4. 确保标题存在
-        # 如果找不到 h1，尝试从其他元素提取标题
-        if not soup.find('h1'):
-            # 尝试找 h2 或 h3
-            for tag in ['h2', 'h3', 'h4']:
-                header = soup.find(tag)
-                if header:
-                    # 转换为 h1
-                    new_h1 = soup.new_tag('h1')
-                    new_h1.string = header.get_text()
-                    header.replace_with(new_h1)
-                    break
+        # 4. 移除空的div
+        for div in soup.find_all('div'):
+            if not div.get_text(strip=True) and not div.find_all('img'):
+                div.decompose()
         
         # 5. 简繁转换
         if CAN_CONVERT:
