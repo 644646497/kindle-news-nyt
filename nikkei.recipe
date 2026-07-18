@@ -2,6 +2,7 @@ import os
 import time
 import re
 import datetime
+from calibre.web.feeds.news import BasicNewsRecipe
 
 os.environ['TZ'] = 'Asia/Shanghai'
 time.tzset()
@@ -17,12 +18,12 @@ class AdvancedUserRecipe1281929028(BasicNewsRecipe):
     
     remove_tags = [
         dict(name='hr'),
-        dict(name='a', attrs={'href': re.compile(r'.*feedx.*')}),
         dict(name='script'),
         dict(name='style'),
     ]
     
     def preprocess_html(self, soup):
+        # 移除RSS推广链接
         for a in soup.find_all('a'):
             if 'feedx' in a.get('href', ''):
                 a.decompose()
@@ -31,6 +32,7 @@ class AdvancedUserRecipe1281929028(BasicNewsRecipe):
                 div.decompose()
         return soup
     
+    # 使用日经官方RSS
     feeds = [
-        ('日经新闻', '        ('日经新闻', 'https://rsshub.app/nikkei/cn'),
+        ('日经中文网', 'https://www.nikkei.com/rss/News/index.rss'),
     ]
