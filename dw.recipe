@@ -6,7 +6,7 @@ import datetime
 import os
 import subprocess
 import urllib.request
-import xml.etree.ElementTree as ET
+import gzip
 from io import BytesIO
 from PIL import Image, ImageDraw, ImageFont
 from calibre.web.feeds.news import BasicNewsRecipe
@@ -65,8 +65,6 @@ class DWRecipe(BasicNewsRecipe):
         dict(name='aside'),
         dict(name='div', attrs={'class': re.compile(r'ad|advertisement|sponsor|promo|banner|share|social', re.I)}),
         dict(name='div', attrs={'id': re.compile(r'ad|advertisement|sponsor|promo|banner|share|social', re.I)}),
-        dict(name='div', attrs={'class': re.compile(r'comment|discussion|response|tag|meta|copyright|disclaimer', re.I)}),
-        dict(name='div', attrs={'id': re.compile(r'comment|discussion|response|tag|meta|copyright|disclaimer', re.I)}),
     ]
 
     extra_css = '''
@@ -87,66 +85,125 @@ class DWRecipe(BasicNewsRecipe):
 
     def parse_index(self):
         feeds = []
-        # 使用德国之声的RSS
+        # 德国之声的RSS - 可能被gzip压缩
         rss_url = 'https://rss.dw.com/rdf/rss-zh'
         
         try:
             self.log.info(f'正在抓取: {rss_url}')
-            headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                'Accept-Encoding': 'gzip, deflate'
+            }
             req = urllib.request.Request(rss_url, headers=headers)
             
             with urllib.request.urlopen(req, timeout=30) as response:
-                rss_content = response.read().decode('utf-8')
+                # 检查是否被gzip压缩
+                content_encoding = response.headers.get('Content-Encoding', '')
+                data = response.read()
+                
+                if 'gzip' in content_encoding:
+                    # 解压gzip
+                    self.log.info('检测到gzip压缩，正在解压...')
+                    import gzip
+                    rss_content = gzip.decompress(data).decode('utf-8')
+                else:
+                    rss_content = data.decode('utf-8')
             
-            root = ET.fromstring(rss_content)
+            self.log.info(f'RSS内容长度: {len(rss_content)} 字符')
             
-            items = []
-            for child in root.iter():
-                if child.tag.endswith('item'):
-                    items.append(child)
-            
+            # 使用正则提取文章（避免XML解析问题）
             articles = []
             seen_urls = set()
             
+            # 提取 title 和 link
+            # 注意德国之声的RSS是RDF格式
+            title_pattern = re.compile(r'<title[^>]*>(.*?)</title>', re.DOTALL)
+            link_pattern = re.compile(r'<link[^>]*>(.*?)</link>', re.DOTALL)
+            
+            # 按 item 分割
+            item_pattern = re.compile(r'<item[^>]*>(.*?)</item>', re.DOTALL)
+            items = item_pattern.findall(rss_content)
+            
+            self.log.info(f'找到 {len(items)} 个items')
+            
             for item in items:
-                title_elem = None
-                link_elem = None
+                title_match = title_pattern.search(item)
+                link_match = link_pattern.search(item)
                 
-                for child in item:
-                    tag_name = child.tag.split('}')[-1] if '}' in child.tag else child.tag
-                    if tag_name == 'title':
-                        title_elem = child
-                    elif tag_name == 'link':
-                        link_elem = child
-                
-                if title_elem is None or link_elem is None:
-                    continue
-                
-                title = title_elem.text.strip() if title_elem.text else ''
-                url = link_elem.text.strip() if link_elem.text else ''
-                
-                if not title or not url or len(title) < 10:
-                    continue
-                
-                if url in seen_urls:
-                    continue
-                
-                seen_urls.add(url)
-                articles.append({
-                    'title': title,
-                    'url': url,
-                    'date': '',
-                    'description': ''
-                })
-                
-                if len(articles) >= self.max_articles_per_feed:
-                    break
+                if title_match and link_match:
+                    title = title_match.group(1).strip()
+                    url = link_match.group(1).strip()
+                    
+                    # 清理 CDATA
+                    title = re.sub(r'<!\[CDATA\[(.*?)\]\]>', r'\1', title)
+                    
+                    # 过滤无效标题
+                    if not title or len(title) < 5:
+                        continue
+                    if not url or not url.startswith('http'):
+                        continue
+                    if url in seen_urls:
+                        continue
+                    
+                    seen_urls.add(url)
+                    articles.append({
+                        'title': title,
+                        'url': url,
+                        'date': '',
+                        'description': ''
+                    })
+                    
+                    if len(articles) >= self.max_articles_per_feed:
+                        break
             
             if articles:
                 feeds.append(('德国之声中文网', articles))
                 self.log.info(f'✅ 成功抓取 {len(articles)} 篇文章')
             else:
                 self.log.warning('⚠️ 未抓到任何文章')
+                # 尝试备用RSS地址
+                self.log.info('尝试备用RSS地址...')
+                backup_urls = [
+                    'https://rss.dw.com/zh/chinese/rss.xml',
+                    'https://www.dw.com/zh/德国之声新闻/s-9077?maca=zh-rss-zh-9077-rdf'
+                ]
+                for backup_url in backup_urls:
+                    try:
+                        self.log.info(f'尝试: {backup_url}')
+                        req = urllib.request.Request(backup_url, headers=headers)
+                        with urllib.request.urlopen(req, timeout=30) as response:
+                            data = response.read()
+                            content_encoding = response.headers.get('Content-Encoding', '')
+                            if 'gzip' in content_encoding:
+                                rss_content = gzip.decompress(data).decode('utf-8')
+                            else:
+                                rss_content = data.decode('utf-8')
+                        
+                        items = item_pattern.findall(rss_content)
+                        backup_articles = []
+                        for item in items:
+                            title_match = title_pattern.search(item)
+                            link_match = link_pattern.search(item)
+                            if title_match and link_match:
+                                title = re.sub(r'<!\[CDATA\[(.*?)\]\]>', r'\1', title_match.group(1).strip())
+                                url = link_match.group(1).strip()
+                                if title and url and len(title) > 5 and url.startswith('http'):
+                                    if url not in seen_urls:
+                                        seen_urls.add(url)
+                                        backup_articles.append({
+                                            'title': title,
+                                            'url': url,
+                                            'date': '',
+                                            'description': ''
+                                        })
+                        
+                        if backup_articles:
+                            feeds.append(('德国之声中文网', backup_articles))
+                            self.log.info(f'✅ 从备用地址成功抓取 {len(backup_articles)} 篇文章')
+                            break
+                    except Exception as e:
+                        self.log.error(f'备用地址失败: {e}')
+                        continue
                 
         except Exception as e:
             self.log.error(f'❌ 解析RSS失败: {str(e)}')
@@ -167,6 +224,25 @@ class DWRecipe(BasicNewsRecipe):
         return soup
 
     def postprocess_html(self, soup, first_fetch):
+        # 恢复标题
+        if not soup.find('h1'):
+            title_tag = soup.find('title')
+            if title_tag:
+                title = title_tag.get_text(strip=True)
+                title = re.sub(r'\s*[|•-]\s*德国之声.*$', '', title).strip()
+                title = re.sub(r'^DW\s*[|•-]\s*', '', title).strip()
+                if title and len(title) > 5:
+                    new_h1 = soup.new_tag('h1')
+                    new_h1.string = title
+                    first_elem = soup.find(['p', 'div'])
+                    if first_elem:
+                        first_elem.insert_before(new_h1)
+                    else:
+                        body = soup.find('body')
+                        if body:
+                            body.insert(0, new_h1)
+        
+        # 简繁转换
         if CAN_CONVERT:
             for elem in soup.find_all(string=True):
                 text = str(elem)
