@@ -43,7 +43,7 @@ class DWRecipe(BasicNewsRecipe):
     title = '德国之声中文网 - ' + datetime.datetime.now().strftime('%Y-%m-%d')
     language = 'zh-CN'
     oldest_article = 1
-    max_articles_per_feed = 30
+    max_articles_per_feed = 25
     auto_cleanup = True
     remove_javascript = True
     compress_news_images = True
@@ -54,7 +54,6 @@ class DWRecipe(BasicNewsRecipe):
         dict(name='article'),
         dict(name='div', attrs={'class': re.compile(r'article|content|story|post|entry|body|text', re.I)}),
         dict(name='main'),
-        dict(name='section', attrs={'class': re.compile(r'content|article|story', re.I)}),
     ]
 
     remove_tags = [
@@ -108,71 +107,9 @@ class DWRecipe(BasicNewsRecipe):
     '''
 
     def parse_index(self):
-        """从德国之声网页抓取文章列表"""
-        feeds = []
-        articles = []
-        seen_urls = set()
-        
-        # 德国之声中文网新闻列表页面
-        urls_to_fetch = [
-            'https://www.dw.com/zh/%E6%96%B0%E9%97%BB/s-9077',
-            'https://www.dw.com/zh/%E4%B8%AD%E5%9B%BD/s-9056',
-            'https://www.dw.com/zh/%E5%9B%BD%E9%99%85/s-9060',
-        ]
-        
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-        }
-        
-        for list_url in urls_to_fetch:
-            try:
-                self.log.info(f'正在抓取列表: {list_url}')
-                req = urllib.request.Request(list_url, headers=headers)
-                
-                with urllib.request.urlopen(req, timeout=30) as response:
-                    html_content = response.read().decode('utf-8')
-                
-                # 从HTML中提取文章标题和链接
-                article_pattern = re.compile(r'<a[^>]*href="(/zh/[^"]+/a-\d+)"[^>]*>([^<]+)</a>', re.I)
-                matches = article_pattern.findall(html_content)
-                
-                for url_suffix, title in matches:
-                    title = re.sub(r'<[^>]+>', '', title).strip()
-                    title = re.sub(r'\s+', ' ', title)
-                    
-                    if not title or len(title) < 10:
-                        continue
-                    
-                    full_url = 'https://www.dw.com' + url_suffix
-                    
-                    if full_url in seen_urls:
-                        continue
-                    
-                    seen_urls.add(full_url)
-                    articles.append({
-                        'title': title,
-                        'url': full_url,
-                        'date': '',
-                        'description': ''
-                    })
-                    
-                    if len(articles) >= self.max_articles_per_feed:
-                        break
-                
-                if len(articles) >= self.max_articles_per_feed:
-                    break
-                    
-            except Exception as e:
-                self.log.error(f'抓取列表失败: {str(e)}')
-                continue
-        
-        if articles:
-            feeds.append(('德国之声中文网', articles))
-            self.log.info(f'✅ 成功抓取 {len(articles)} 篇文章')
-        else:
-            self.log.warning('⚠️ 未抓到任何文章')
-        
-        return feeds
+        """使用 Calibre 内置的 feeds 功能"""
+        # 使用 Calibre 的 feeds 属性，让 Calibre 自动处理
+        return None
 
     def preprocess_html(self, soup):
         # 修复图片
@@ -185,7 +122,7 @@ class DWRecipe(BasicNewsRecipe):
                     src = 'https://www.dw.com' + src
                 img['src'] = src
         
-        # 德国之声文章主体通常在 div.text 中
+        # 尝试找到文章主体
         text_container = soup.find('div', class_='text') or soup.find('div', id='text')
         if text_container:
             soup = text_container
@@ -298,3 +235,8 @@ class DWRecipe(BasicNewsRecipe):
         except Exception as e:
             self.log.error(f'封面生成失败: {e}')
             return None
+
+# 使用 feeds 属性，让 Calibre 自动解析
+DWRecipe.feeds = [
+    ('德国之声中文网', 'https://rss.dw.com/rdf/rss-zh')
+]
