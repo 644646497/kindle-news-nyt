@@ -110,8 +110,8 @@ class NikkeiRecipe(BasicNewsRecipe):
     def parse_index(self):
         feeds = []
         
-        # 日经中文网 RSS
-        rss_url = 'https://www.nikkei.com/rss/News/index.rss'
+        # 使用 RSSHub 代理日经中文网
+        rss_url = 'https://rsshub.app/nikkei/cn'
         
         try:
             self.log.info(f'正在抓取: {rss_url}')
@@ -136,7 +136,6 @@ class NikkeiRecipe(BasicNewsRecipe):
             for item in items:
                 title_elem = None
                 link_elem = None
-                date_elem = None
                 
                 for child in item:
                     tag_name = child.tag.split('}')[-1] if '}' in child.tag else child.tag
@@ -144,15 +143,12 @@ class NikkeiRecipe(BasicNewsRecipe):
                         title_elem = child
                     elif tag_name == 'link':
                         link_elem = child
-                    elif tag_name == 'pubDate':
-                        date_elem = child
                 
                 if title_elem is None or link_elem is None:
                     continue
                 
                 title = title_elem.text.strip() if title_elem.text else ''
                 url = link_elem.text.strip() if link_elem.text else ''
-                date = date_elem.text.strip() if date_elem is not None and date_elem.text else ''
                 
                 if not title or not url or len(title) < 5:
                     continue
@@ -164,7 +160,7 @@ class NikkeiRecipe(BasicNewsRecipe):
                 articles.append({
                     'title': title,
                     'url': url,
-                    'date': date,
+                    'date': '',
                     'description': ''
                 })
                 
@@ -194,11 +190,6 @@ class NikkeiRecipe(BasicNewsRecipe):
                 elif src.startswith('/') and not src.startswith('//'):
                     src = 'https://www.nikkei.com' + src
                 img['src'] = src
-        
-        # 日经文章主体
-        text_container = soup.find('div', class_='article-body') or soup.find('div', id='article-body')
-        if text_container:
-            soup = text_container
         
         return soup
 
