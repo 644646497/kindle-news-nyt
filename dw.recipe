@@ -5,6 +5,8 @@ import re
 import datetime
 import os
 import subprocess
+import urllib.request
+import xml.etree.ElementTree as ET
 from io import BytesIO
 from PIL import Image, ImageDraw, ImageFont
 from calibre.web.feeds.news import BasicNewsRecipe
@@ -48,30 +50,23 @@ class DWRecipe(BasicNewsRecipe):
     compress_news_images = True
     scale_news_images_to = 600
     
-    # 使用 Calibre 的自动文章提取
-    extract_article = True
-    
-    # 使用 feeds
-    feeds = [
-        ('德国之声中文网', 'https://rss.dw.com/rdf/rss-zh')
-    ]
-    
-    # 只保留核心内容
     keep_only_tags = [
-        dict(name='div', attrs={'class': re.compile(r'content|article|story|post|entry|body|text', re.I)}),
-        dict(name='div', attrs={'itemprop': 'articleBody'}),
+        dict(name='h1'),
+        dict(name='article', attrs={'class': re.compile(r'article-content')}),
+        dict(name='div', attrs={'class': re.compile(r'article-body|article-content|story-body|entry-content|post-content|main-content')}),
+        dict(name='div', attrs={'class': re.compile(r'content|main', re.I)}),
         dict(name='article'),
         dict(name='main'),
-        dict(name='section', attrs={'class': re.compile(r'content|article|story', re.I)}),
     ]
 
     remove_tags = [
         dict(name='script'), dict(name='style'), dict(name='iframe'),
         dict(name='nav'), dict(name='header'), dict(name='footer'),
         dict(name='aside'),
-        dict(name='div', attrs={'class': re.compile(r'ad|advertisement|sponsor|promo|banner|share|social|related|recommend|sidebar|breadcrumb', re.I)}),
-        dict(name='div', attrs={'id': re.compile(r'ad|advertisement|sponsor|promo|banner|share|social|related|recommend|sidebar|breadcrumb', re.I)}),
-        dict(name='div', attrs={'class': re.compile(r'comment|discussion|response|tag|meta|copyright', re.I)}),
+        dict(name='div', attrs={'class': re.compile(r'ad|advertisement|sponsor|promo|banner|share|social', re.I)}),
+        dict(name='div', attrs={'id': re.compile(r'ad|advertisement|sponsor|promo|banner|share|social', re.I)}),
+        dict(name='div', attrs={'class': re.compile(r'comment|discussion|response|tag|meta|copyright|disclaimer', re.I)}),
+        dict(name='div', attrs={'id': re.compile(r'comment|discussion|response|tag|meta|copyright|disclaimer', re.I)}),
     ]
 
     extra_css = '''
@@ -84,40 +79,83 @@ class DWRecipe(BasicNewsRecipe):
             margin: 0 auto;
             padding: 20px;
         }
-        h1 { 
-            font-size: 24px; 
-            font-weight: bold; 
-            margin: 20px 0 10px 0;
-            color: #1a1a2e;
-            line-height: 1.4;
-        }
-        h2 { 
-            font-size: 20px; 
-            font-weight: bold; 
-            margin: 15px 0 8px 0;
-            color: #2d2d44;
-        }
-        p { 
-            margin: 10px 0; 
-            text-indent: 2em;
-            text-align: justify;
-        }
-        img { 
-            max-width: 100%; 
-            height: auto; 
-            display: block; 
-            margin: 10px auto; 
-        }
-        blockquote { 
-            border-left: 4px solid #e94560; 
-            padding-left: 20px; 
-            margin-left: 20px; 
-            color: #555; 
-        }
+        h1 { font-size: 24px; font-weight: bold; margin: 20px 0 10px 0; color: #1a1a2e; }
+        p { margin: 10px 0; text-indent: 2em; text-align: justify; }
+        img { max-width: 100%; height: auto; display: block; margin: 10px auto; }
+        blockquote { border-left: 4px solid #e94560; padding-left: 20px; margin-left: 20px; color: #555; }
     '''
 
+    def parse_index(self):
+        feeds = []
+        # 使用德国之声的RSS
+        rss_url = 'https://rss.dw.com/rdf/rss-zh'
+        
+        try:
+            self.log.info(f'正在抓取: {rss_url}')
+            headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+            req = urllib.request.Request(rss_url, headers=headers)
+            
+            with urllib.request.urlopen(req, timeout=30) as response:
+                rss_content = response.read().decode('utf-8')
+            
+            root = ET.fromstring(rss_content)
+            
+            items = []
+            for child in root.iter():
+                if child.tag.endswith('item'):
+                    items.append(child)
+            
+            articles = []
+            seen_urls = set()
+            
+            for item in items:
+                title_elem = None
+                link_elem = None
+                
+                for child in item:
+                    tag_name = child.tag.split('}')[-1] if '}' in child.tag else child.tag
+                    if tag_name == 'title':
+                        title_elem = child
+                    elif tag_name == 'link':
+                        link_elem = child
+                
+                if title_elem is None or link_elem is None:
+                    continue
+                
+                title = title_elem.text.strip() if title_elem.text else ''
+                url = link_elem.text.strip() if link_elem.text else ''
+                
+                if not title or not url or len(title) < 10:
+                    continue
+                
+                if url in seen_urls:
+                    continue
+                
+                seen_urls.add(url)
+                articles.append({
+                    'title': title,
+                    'url': url,
+                    'date': '',
+                    'description': ''
+                })
+                
+                if len(articles) >= self.max_articles_per_feed:
+                    break
+            
+            if articles:
+                feeds.append(('德国之声中文网', articles))
+                self.log.info(f'✅ 成功抓取 {len(articles)} 篇文章')
+            else:
+                self.log.warning('⚠️ 未抓到任何文章')
+                
+        except Exception as e:
+            self.log.error(f'❌ 解析RSS失败: {str(e)}')
+            import traceback
+            self.log.error(traceback.format_exc())
+        
+        return feeds
+
     def preprocess_html(self, soup):
-        # 修复图片
         for img in soup.find_all('img'):
             src = img.get('data-src') or img.get('src', '')
             if src:
@@ -126,27 +164,63 @@ class DWRecipe(BasicNewsRecipe):
                 elif src.startswith('/') and not src.startswith('//'):
                     src = 'https://www.dw.com' + src
                 img['src'] = src
-        
-        # 德国之声特定处理：尝试找到文章内容的容器
-        # 常见的是 class="text" 或 id="text"
-        text_container = soup.find('div', class_='text') or soup.find('div', id='text')
-        if text_container:
-            # 如果找到了 text 容器，只保留它
-            soup = text_container
-        
-        # 另一种常见结构
-        article_container = soup.find('div', class_='article-content') or soup.find('div', id='article-content')
-        if article_container:
-            soup = article_container
-        
         return soup
 
     def postprocess_html(self, soup, first_fetch):
-        # 恢复标题
-        if not soup.find('h1'):
-            title_tag = soup.find('title')
-            if title_tag:
-                title = title_tag.get_text(strip=True)
-                title = re.sub(r'\s*[|•-]\s*德国之声.*$', '', title).strip()
-                title = re.sub(r'^DW\s*[|•-]\s*', '', title).strip()
-        
+        if CAN_CONVERT:
+            for elem in soup.find_all(string=True):
+                text = str(elem)
+                if len(text) > 3:
+                    parent = elem.parent
+                    if parent and parent.name not in ['script', 'style']:
+                        try:
+                            converted = cc.convert(text)
+                            if converted != text:
+                                elem.replace_with(converted)
+                        except:
+                            pass
+        return soup
+
+    def get_cover_url(self):
+        try:
+            width, height = 600, 800
+            img = Image.new('RGB', (width, height), color='#1a1a2e')
+            draw = ImageDraw.Draw(img)
+            
+            font_path = FONT_PATH
+            try:
+                if font_path and os.path.exists(font_path):
+                    font_large = ImageFont.truetype(font_path, 72)
+                    font_medium = ImageFont.truetype(font_path, 36)
+                    font_small = ImageFont.truetype(font_path, 28)
+                else:
+                    font_large = font_medium = font_small = ImageFont.load_default()
+            except:
+                font_large = font_medium = font_small = ImageFont.load_default()
+            
+            draw.rectangle([(50, 200), (550, 205)], fill='#e94560')
+            
+            title = '德国之声'
+            subtitle = '中文网'
+            date_str = datetime.datetime.now().strftime('%Y年%m月%d日')
+            
+            bbox = draw.textbbox((0, 0), title, font=font_large)
+            tw = bbox[2] - bbox[0]
+            draw.text(((width - tw) // 2, 250), title, fill='#ffffff', font=font_large)
+            
+            bbox = draw.textbbox((0, 0), subtitle, font=font_medium)
+            sw = bbox[2] - bbox[0]
+            draw.text(((width - sw) // 2, 340), subtitle, fill='#e94560', font=font_medium)
+            
+            bbox = draw.textbbox((0, 0), date_str, font=font_small)
+            dw = bbox[2] - bbox[0]
+            draw.text(((width - dw) // 2, 450), date_str, fill='#ffffff', font=font_small)
+            
+            cover_bytes = BytesIO()
+            img.save(cover_bytes, 'JPEG', quality=85)
+            cover_bytes.seek(0)
+            return cover_bytes.getvalue()
+            
+        except Exception as e:
+            self.log.error(f'封面生成失败: {e}')
+            return None
