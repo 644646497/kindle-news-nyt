@@ -1,33 +1,284 @@
-import os
-import time
+#!/usr/bin/env python
+# vim:fileencoding=utf-8
+from __future__ import unicode_literals, division, absolute_import, print_function
 import re
 import datetime
+import os
+import subprocess
+import urllib.request
+import xml.etree.ElementTree as ET
+from io import BytesIO
+from PIL import Image, ImageDraw, ImageFont
+from calibre.web.feeds.news import BasicNewsRecipe
 
-os.environ['TZ'] = 'Asia/Shanghai'
-time.tzset()
+try:
+    from opencc import OpenCC
+    cc = OpenCC('t2s')
+    CAN_CONVERT = True
+except ImportError:
+    CAN_CONVERT = False
 
-class AdvancedUserRecipeBBC(BasicNewsRecipe):
-    title = datetime.datetime.now().strftime('BBC中文 - %Y-%m-%d %H-%M')
-    language = 'zh_CN'
+def ensure_chinese_font():
+    font_paths = [
+        "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
+        "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc"
+    ]
+    for path in font_paths:
+        if os.path.exists(path):
+            return path
+    print(">>> 未检测到中文字体，正在尝试安装...")
+    try:
+        subprocess.run(["sudo", "apt-get", "update"], check=True, capture_output=True)
+        subprocess.run(["sudo", "apt-get", "install", "-y", "fonts-noto-cjk"], check=True, capture_output=True)
+        subprocess.run(["fc-cache", "-f"], check=True, capture_output=True)
+        for path in font_paths:
+            if os.path.exists(path):
+                return path
+    except Exception as e:
+        print(f">>> 安装字体失败: {e}")
+    return None
+
+FONT_PATH = ensure_chinese_font()
+
+class BBCRecipe(BasicNewsRecipe):
+    title = 'BBC中文网 - ' + datetime.datetime.now().strftime('%Y-%m-%d')
+    language = 'zh-CN'
     oldest_article = 1
-    max_articles_per_feed = 10
+    max_articles_per_feed = 25
+    auto_cleanup = True
+    remove_javascript = True
+    compress_news_images = True
+    scale_news_images_to = 600
     
-    no_summaries = True
-    use_embedded_content = True
-    
+    keep_only_tags = [
+        dict(name='h1'),
+        dict(name='article'),
+        dict(name='div', attrs={'class': re.compile(r'article|content|story|post|entry|body', re.I)}),
+        dict(name='main'),
+    ]
+
     remove_tags = [
-        dict(name='hr'),
-        dict(name='a', attrs={'href': re.compile(r'.*feedx.*')}),
-        dict(name='script'),
-        dict(name='style'),
+        dict(name='script'), dict(name='style'), dict(name='iframe'),
+        dict(name='nav'), dict(name='header'), dict(name='footer'),
+        dict(name='aside'),
+        dict(name='div', attrs={'class': re.compile(r'ad|advertisement|sponsor|promo|banner|share|social', re.I)}),
+        dict(name='div', attrs={'id': re.compile(r'ad|advertisement|sponsor|promo|banner|share|social', re.I)}),
     ]
-    
+
+    extra_css = '''
+        body { 
+            font-family: "Noto Sans CJK SC", "PingFang SC", "Microsoft YaHei", sans-serif;
+            line-height: 1.8;
+            font-size: 16px;
+            color: #333;
+            max-width: 700px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        h1 { 
+            font-size: 24px; 
+            font-weight: bold; 
+            margin: 20px 0 10px 0;
+            color: #1a1a2e;
+            line-height: 1.4;
+        }
+        p { 
+            margin: 10px 0; 
+            text-indent: 2em;
+            text-align: justify;
+        }
+        img { 
+            max-width: 100%; 
+            height: auto; 
+            display: block; 
+            margin: 10px auto; 
+        }
+        blockquote { 
+            border-left: 4px solid #e94560; 
+            padding-left: 20px; 
+            margin-left: 20px; 
+            color: #555; 
+        }
+    '''
+
+    def parse_index(self):
+        feeds = []
+        rss_url = 'https://www.bbc.com/zhongwen/simp/index.xml'
+        
+        try:
+            self.log.info(f'正在抓取: {rss_url}')
+            headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+            req = urllib.request.Request(rss_url, headers=headers)
+            
+            with urllib.request.urlopen(req, timeout=30) as response:
+                rss_content = response.read().decode('utf-8')
+            
+            root = ET.fromstring(rss_content)
+            
+            items = []
+            for child in root.iter():
+                if child.tag.endswith('item'):
+                    items.append(child)
+            
+            articles = []
+            seen_urls = set()
+            
+            for item in items:
+                title_elem = None
+                link_elem = None
+                
+                for child in item:
+                    tag_name = child.tag.split('}')[-1] if '}' in child.tag else child.tag
+                    if tag_name == 'title':
+                        title_elem = child
+                    elif tag_name == 'link':
+                        link_elem = child
+                
+                if title_elem is None or link_elem is None:
+                    continue
+                
+                title = title_elem.text.strip() if title_elem.text else ''
+                url = link_elem.text.strip() if link_elem.text else ''
+                
+                if not title or not url or len(title) < 5:
+                    continue
+                
+                if url in seen_urls:
+                    continue
+                
+                seen_urls.add(url)
+                articles.append({
+                    'title': title,
+                    'url': url,
+                    'date': '',
+                    'description': ''
+                })
+                
+                if len(articles) >= self.max_articles_per_feed:
+                    break
+            
+            if articles:
+                feeds.append(('BBC中文网', articles))
+                self.log.info(f'✅ 成功抓取 {len(articles)} 篇文章')
+            else:
+                self.log.warning('⚠️ 未抓到任何文章')
+                
+        except Exception as e:
+            self.log.error(f'❌ 解析RSS失败: {str(e)}')
+            import traceback
+            self.log.error(traceback.format_exc())
+        
+        return feeds
+
     def preprocess_html(self, soup):
-        for a in soup.find_all('a'):
-            if 'feedx' in a.get('href', ''):
-                a.decompose()
+        for img in soup.find_all('img'):
+            src = img.get('data-src') or img.get('src', '')
+            if src:
+                if src.startswith('//'):
+                    src = 'https:' + src
+                elif src.startswith('/') and not src.startswith('//'):
+                    src = 'https://www.bbc.com' + src
+                img['src'] = src
         return soup
-    
-    feeds = [
-        ('BBC中文', 'https://feedx.net/rss/bbc.xml'),
-    ]
+
+    def postprocess_html(self, soup, first_fetch):
+        if not soup.find('h1'):
+            title_tag = soup.find('title')
+            if title_tag:
+                title = title_tag.get_text(strip=True)
+                title = re.sub(r'\s*[|•-]\s*BBC.*$', '', title).strip()
+                if title and len(title) > 5:
+                    new_h1 = soup.new_tag('h1')
+                    new_h1.string = title
+                    first_elem = soup.find(['p', 'div'])
+                    if first_elem:
+                        first_elem.insert_before(new_h1)
+                    else:
+                        body = soup.find('body')
+                        if body:
+                            body.insert(0, new_h1)
+        
+        for div in soup.find_all(['div', 'section', 'ul', 'ol']):
+            classes = ' '.join(div.get('class', [])).lower()
+            div_id = div.get('id', '').lower()
+            text = div.get_text()
+            
+            is_related = False
+            if any(k in classes or k in div_id for k in ['related', 'recommend', 'suggestion', 'popular', 'trending']):
+                is_related = True
+            if any(k in text for k in ['推荐阅读', '相关文章', '热门文章', '更多文章', '你可能感兴趣']):
+                is_related = True
+            
+            if is_related:
+                links = div.find_all('a')
+                if len(links) >= 3:
+                    div.decompose()
+                    continue
+        
+        for elem in soup.find_all(string=re.compile(r'downloaded by calibre', re.I)):
+            if elem.parent:
+                elem.parent.decompose()
+        
+        if CAN_CONVERT:
+            for elem in soup.find_all(string=True):
+                text = str(elem)
+                if len(text) > 3:
+                    parent = elem.parent
+                    if parent and parent.name not in ['script', 'style']:
+                        try:
+                            converted = cc.convert(text)
+                            if converted != text:
+                                elem.replace_with(converted)
+                        except:
+                            pass
+        
+        return soup
+
+    def get_cover_url(self):
+        try:
+            width, height = 600, 800
+            img = Image.new('RGB', (width, height), color='#1a1a2e')
+            draw = ImageDraw.Draw(img)
+            
+            font_path = FONT_PATH
+            try:
+                if font_path and os.path.exists(font_path):
+                    font_large = ImageFont.truetype(font_path, 72)
+                    font_medium = ImageFont.truetype(font_path, 36)
+                    font_small = ImageFont.truetype(font_path, 28)
+                else:
+                    font_large = font_medium = font_small = ImageFont.load_default()
+            except:
+                font_large = font_medium = font_small = ImageFont.load_default()
+            
+            draw.rectangle([(50, 200), (550, 205)], fill='#e94560')
+            
+            title = 'BBC'
+            subtitle = '中文网'
+            date_str = datetime.datetime.now().strftime('%Y年%m月%d日')
+            
+            bbox = draw.textbbox((0, 0), title, font=font_large)
+            tw = bbox[2] - bbox[0]
+            draw.text(((width - tw) // 2, 250), title, fill='#ffffff', font=font_large)
+            
+            bbox = draw.textbbox((0, 0), subtitle, font=font_medium)
+            sw = bbox[2] - bbox[0]
+            draw.text(((width - sw) // 2, 340), subtitle, fill='#e94560', font=font_medium)
+            
+            bbox = draw.textbbox((0, 0), date_str, font=font_small)
+            dw = bbox[2] - bbox[0]
+            draw.text(((width - dw) // 2, 450), date_str, fill='#ffffff', font=font_small)
+            
+            footer_text = 'Kindle 推送版'
+            bbox = draw.textbbox((0, 0), footer_text, font=font_small)
+            fw = bbox[2] - bbox[0]
+            draw.text(((width - fw) // 2, 700), footer_text, fill='#666666', font=font_small)
+            
+            cover_bytes = BytesIO()
+            img.save(cover_bytes, 'JPEG', quality=85)
+            cover_bytes.seek(0)
+            return cover_bytes.getvalue()
+            
+        except Exception as e:
+            self.log.error(f'封面生成失败: {e}')
+            return None
