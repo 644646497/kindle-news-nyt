@@ -44,7 +44,7 @@ class NikkeiRecipe(BasicNewsRecipe):
     title = '日经中文网 - ' + datetime.datetime.now().strftime('%Y-%m-%d')
     language = 'zh-CN'
     oldest_article = 1
-    max_articles_per_feed = 30
+    max_articles_per_feed = 25
     auto_cleanup = True
     remove_javascript = True
     compress_news_images = True
@@ -52,8 +52,10 @@ class NikkeiRecipe(BasicNewsRecipe):
     
     keep_only_tags = [
         dict(name='h1'),
+        dict(name='article', attrs={'class': re.compile(r'article-content')}),
+        dict(name='div', attrs={'class': re.compile(r'article-body|article-content|story-body|entry-content|post-content|main-content')}),
+        dict(name='div', attrs={'class': re.compile(r'content|main', re.I)}),
         dict(name='article'),
-        dict(name='div', attrs={'class': re.compile(r'article|content|story|post|entry|body|main', re.I)}),
         dict(name='main'),
     ]
 
@@ -61,8 +63,10 @@ class NikkeiRecipe(BasicNewsRecipe):
         dict(name='script'), dict(name='style'), dict(name='iframe'),
         dict(name='nav'), dict(name='header'), dict(name='footer'),
         dict(name='aside'),
-        dict(name='div', attrs={'class': re.compile(r'ad|advertisement|sponsor|promo|banner|share|social|related|recommend|sidebar', re.I)}),
-        dict(name='div', attrs={'id': re.compile(r'ad|advertisement|sponsor|promo|banner|share|social|related|recommend|sidebar', re.I)}),
+        dict(name='div', attrs={'class': re.compile(r'ad|advertisement|sponsor|promo|banner|share|social', re.I)}),
+        dict(name='div', attrs={'id': re.compile(r'ad|advertisement|sponsor|promo|banner|share|social', re.I)}),
+        dict(name='div', attrs={'class': re.compile(r'comment|discussion|response|tag|meta|copyright|disclaimer', re.I)}),
+        dict(name='div', attrs={'id': re.compile(r'comment|discussion|response|tag|meta|copyright|disclaimer', re.I)}),
     ]
 
     extra_css = '''
@@ -75,49 +79,20 @@ class NikkeiRecipe(BasicNewsRecipe):
             margin: 0 auto;
             padding: 20px;
         }
-        h1 { 
-            font-size: 24px; 
-            font-weight: bold; 
-            margin: 20px 0 10px 0;
-            color: #1a1a2e;
-            line-height: 1.4;
-        }
-        h2 { 
-            font-size: 20px; 
-            font-weight: bold; 
-            margin: 15px 0 8px 0;
-            color: #2d2d44;
-        }
-        p { 
-            margin: 10px 0; 
-            text-indent: 2em;
-            text-align: justify;
-        }
-        img { 
-            max-width: 100%; 
-            height: auto; 
-            display: block; 
-            margin: 10px auto; 
-        }
-        blockquote { 
-            border-left: 4px solid #e94560; 
-            padding-left: 20px; 
-            margin-left: 20px; 
-            color: #555; 
-        }
+        h1 { font-size: 24px; font-weight: bold; margin: 20px 0 10px 0; color: #1a1a2e; }
+        p { margin: 10px 0; text-indent: 2em; text-align: justify; }
+        img { max-width: 100%; height: auto; display: block; margin: 10px auto; }
+        blockquote { border-left: 4px solid #e94560; padding-left: 20px; margin-left: 20px; color: #555; }
     '''
 
     def parse_index(self):
         feeds = []
-        
-        # 使用 RSSHub 代理日经中文网
-        rss_url = 'https://rsshub.app/nikkei/cn'
+        # 日经中文网 - 使用 feedx 代理（在海外可访问）
+        rss_url = 'https://feedx.net/rss/nikkei.xml'
         
         try:
             self.log.info(f'正在抓取: {rss_url}')
-            headers = {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-            }
+            headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
             req = urllib.request.Request(rss_url, headers=headers)
             
             with urllib.request.urlopen(req, timeout=30) as response:
@@ -150,7 +125,7 @@ class NikkeiRecipe(BasicNewsRecipe):
                 title = title_elem.text.strip() if title_elem.text else ''
                 url = link_elem.text.strip() if link_elem.text else ''
                 
-                if not title or not url or len(title) < 5:
+                if not title or not url or len(title) < 10:
                     continue
                 
                 if url in seen_urls:
@@ -171,7 +146,46 @@ class NikkeiRecipe(BasicNewsRecipe):
                 feeds.append(('日经中文网', articles))
                 self.log.info(f'✅ 成功抓取 {len(articles)} 篇文章')
             else:
-                self.log.warning('⚠️ 未抓到任何文章')
+                self.log.warning('⚠️ 未抓到任何文章，尝试备用地址...')
+                # 备用地址
+                backup_url = 'https://rsshub.app/nikkei/cn'
+                req = urllib.request.Request(backup_url, headers=headers)
+                with urllib.request.urlopen(req, timeout=30) as response:
+                    rss_content = response.read().decode('utf-8')
+                root = ET.fromstring(rss_content)
+                items = []
+                for child in root.iter():
+                    if child.tag.endswith('item'):
+                        items.append(child)
+                for item in items:
+                    title_elem = None
+                    link_elem = None
+                    for child in item:
+                        tag_name = child.tag.split('}')[-1] if '}' in child.tag else child.tag
+                        if tag_name == 'title':
+                            title_elem = child
+                        elif tag_name == 'link':
+                            link_elem = child
+                    if title_elem is None or link_elem is None:
+                        continue
+                    title = title_elem.text.strip() if title_elem.text else ''
+                    url = link_elem.text.strip() if link_elem.text else ''
+                    if not title or not url or len(title) < 10:
+                        continue
+                    if url in seen_urls:
+                        continue
+                    seen_urls.add(url)
+                    articles.append({
+                        'title': title,
+                        'url': url,
+                        'date': '',
+                        'description': ''
+                    })
+                    if len(articles) >= self.max_articles_per_feed:
+                        break
+                if articles:
+                    feeds.append(('日经中文网', articles))
+                    self.log.info(f'✅ 从备用地址成功抓取 {len(articles)} 篇文章')
                 
         except Exception as e:
             self.log.error(f'❌ 解析RSS失败: {str(e)}')
@@ -181,7 +195,6 @@ class NikkeiRecipe(BasicNewsRecipe):
         return feeds
 
     def preprocess_html(self, soup):
-        # 修复图片
         for img in soup.find_all('img'):
             src = img.get('data-src') or img.get('src', '')
             if src:
@@ -190,11 +203,9 @@ class NikkeiRecipe(BasicNewsRecipe):
                 elif src.startswith('/') and not src.startswith('//'):
                     src = 'https://www.nikkei.com' + src
                 img['src'] = src
-        
         return soup
 
     def postprocess_html(self, soup, first_fetch):
-        # 恢复标题
         if not soup.find('h1'):
             title_tag = soup.find('title')
             if title_tag:
@@ -212,7 +223,6 @@ class NikkeiRecipe(BasicNewsRecipe):
                         if body:
                             body.insert(0, new_h1)
         
-        # 移除推荐列表
         for div in soup.find_all(['div', 'section', 'ul', 'ol']):
             classes = ' '.join(div.get('class', [])).lower()
             div_id = div.get('id', '').lower()
@@ -230,12 +240,10 @@ class NikkeiRecipe(BasicNewsRecipe):
                     div.decompose()
                     continue
         
-        # 移除下载信息
         for elem in soup.find_all(string=re.compile(r'downloaded by calibre', re.I)):
             if elem.parent:
                 elem.parent.decompose()
         
-        # 简繁转换
         if CAN_CONVERT:
             for elem in soup.find_all(string=True):
                 text = str(elem)
@@ -285,11 +293,6 @@ class NikkeiRecipe(BasicNewsRecipe):
             bbox = draw.textbbox((0, 0), date_str, font=font_small)
             dw = bbox[2] - bbox[0]
             draw.text(((width - dw) // 2, 450), date_str, fill='#ffffff', font=font_small)
-            
-            footer_text = 'Kindle 推送版'
-            bbox = draw.textbbox((0, 0), footer_text, font=font_small)
-            fw = bbox[2] - bbox[0]
-            draw.text(((width - fw) // 2, 700), footer_text, fill='#666666', font=font_small)
             
             cover_bytes = BytesIO()
             img.save(cover_bytes, 'JPEG', quality=85)
