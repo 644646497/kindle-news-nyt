@@ -17,6 +17,8 @@ class NikkeiRecipe(BasicNewsRecipe):
     auto_cleanup = True
     remove_javascript = True
     compress_news_images = True
+    # 自动清理多余广告标签
+    remove_tags = [dict(class_=['ad', 'banner', 'recommend', 'related_box'])]
 
     extra_css = '''
         body { font-family: "Noto Sans CJK SC", sans-serif; line-height: 1.8; font-size: 16px; }
@@ -36,10 +38,12 @@ class NikkeiRecipe(BasicNewsRecipe):
             'https://cn.nikkei.com/industry/',
         ]
         
-        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
-        
-        pattern = re.compile(r'href="(/[^"]*?/\d+-\d{4}-\d{2}-\d{2}-\d{2}-\d{2}\.html)"[^>]*>([^<]+)</a>', re.I)
-        
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+        }
+        # 更新正则：适配当前日经链接 /xxx/2026-07-20-xxxx.html
+        pattern = re.compile(r'href="(/[^"]*?/\d{4}-\d{2}-\d{2}-\d+\.html)"[^>]*>([^<]+)</a>', re.I)
+
         for base_url in urls:
             try:
                 req = urllib.request.Request(base_url, headers=headers)
@@ -50,7 +54,8 @@ class NikkeiRecipe(BasicNewsRecipe):
                     url_suffix, title = match
                     title = re.sub(r'\s+', ' ', title.strip())
                     
-                    if len(title) < 10 or any(x in title for x in ['首页','搜索','登录','注册','订阅']):
+                    # 过滤导航、无用链接
+                    if len(title) < 10 or any(k in title for k in ['首页','搜索','登录','注册','订阅','广告']):
                         continue
                     
                     full_url = 'https://cn.nikkei.com' + url_suffix
@@ -62,35 +67,44 @@ class NikkeiRecipe(BasicNewsRecipe):
                         'title': title,
                         'url': full_url,
                         'description': '',
-                        'date': ''
+                        'date': datetime.datetime.now()
                     })
                     
                     if len(articles) >= self.max_articles_per_feed:
                         break
             except Exception as e:
-                self.log.error(f'抓取失败 {base_url}: {e}')
+                self.log.error(f'抓取栏目失败 {base_url}: {str(e)}')
         
-        self.log.info(f'成功抓取 {len(articles)} 篇文章')
-        return [('日经中文网', articles)]
+        self.log.info(f'本次共抓取有效文章 {len(articles)} 篇')
+        return [('日经中文网资讯', articles)]
 
     def preprocess_html(self, soup):
+        # 补全相对图片地址
         for img in soup.find_all('img'):
-            src = img.get('src') or img.get('data-src')
+            src = img.get('data-src') or img.get('src')
             if src and src.startswith('/'):
-                img['src'] = 'https://cn.nikkei.com' + src
+                img['src'] = f'https://cn.nikkei.com{src}'
         return soup
 
     def get_cover_url(self):
         try:
-            img = Image.new('RGB', (600, 800), color='#1a1a2e')
+            width, height = 600, 800
+            img = Image.new('RGB', (width, height), color='#1a1a2e')
             draw = ImageDraw.Draw(img)
-            font = ImageFont.load_default()
-            date = datetime.datetime.now().strftime('%Y年%m月%d日')
-            draw.text((150, 300), "日经中文网", fill="white", font=font)
-            draw.text((150, 400), date, fill="white", font=font)
+            # 加载系统中文字体兜底
+            try:
+                font_big = ImageFont.truetype("/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc", 48)
+                font_small = ImageFont.truetype("/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc", 28)
+            except:
+                font_big = ImageFont.load_default()
+                font_small = ImageFont.load_default()
+            date_str = datetime.datetime.now().strftime('%Y年%m月%d日')
+            draw.text((120, 320), "日经中文网", fill="white", font=font_big)
+            draw.text((160, 420), date_str, fill="#cccccc", font=font_small)
             bio = BytesIO()
-            img.save(bio, 'JPEG')
+            img.save(bio, 'JPEG', quality=85)
             bio.seek(0)
             return bio.getvalue()
-        except:
+        except Exception as e:
+            self.log.warn(f'封面生成失败: {e}')
             return None
