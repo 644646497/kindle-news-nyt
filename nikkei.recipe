@@ -43,7 +43,7 @@ class NikkeiRecipe(BasicNewsRecipe):
     title = '日经中文网 - ' + datetime.datetime.now().strftime('%Y-%m-%d')
     language = 'zh-CN'
     oldest_article = 1
-    max_articles_per_feed = 30
+    max_articles_per_feed = 35
     auto_cleanup = True
     remove_javascript = True
     compress_news_images = True
@@ -65,49 +65,14 @@ class NikkeiRecipe(BasicNewsRecipe):
     ]
 
     extra_css = '''
-        body { 
-            font-family: "Noto Sans CJK SC", "PingFang SC", "Microsoft YaHei", sans-serif;
-            line-height: 1.8;
-            font-size: 16px;
-            color: #333;
-            max-width: 700px;
-            margin: 0 auto;
-            padding: 20px;
-        }
-        h1 { 
-            font-size: 24px; 
-            font-weight: bold; 
-            margin: 20px 0 10px 0;
-            color: #1a1a2e;
-            line-height: 1.4;
-        }
-        h2 { 
-            font-size: 20px; 
-            font-weight: bold; 
-            margin: 15px 0 8px 0;
-            color: #2d2d44;
-        }
-        p { 
-            margin: 10px 0; 
-            text-indent: 2em;
-            text-align: justify;
-        }
-        img { 
-            max-width: 100%; 
-            height: auto; 
-            display: block; 
-            margin: 10px auto; 
-        }
-        blockquote { 
-            border-left: 4px solid #e94560; 
-            padding-left: 20px; 
-            margin-left: 20px; 
-            color: #555; 
-        }
+        body { font-family: "Noto Sans CJK SC", "PingFang SC", "Microsoft YaHei", sans-serif; line-height: 1.8; font-size: 16px; color: #333; max-width: 700px; margin: 0 auto; padding: 20px; }
+        h1 { font-size: 24px; font-weight: bold; margin: 20px 0 10px 0; color: #1a1a2e; line-height: 1.4; }
+        h2 { font-size: 20px; font-weight: bold; margin: 15px 0 8px 0; color: #2d2d44; }
+        p { margin: 10px 0; text-indent: 2em; text-align: justify; }
+        img { max-width: 100%; height: auto; display: block; margin: 10px auto; }
     '''
 
     def parse_index(self):
-        """从日经中文网首页抓取文章列表 - 适配2026新结构"""
         feeds = []
         articles = []
         seen_urls = set()
@@ -117,15 +82,14 @@ class NikkeiRecipe(BasicNewsRecipe):
             'https://cn.nikkei.com/china/',
             'https://cn.nikkei.com/politicsaeconomy/',
             'https://cn.nikkei.com/industry/',
-            'https://cn.nikkei.com/columnviewpoint/',
         ]
         
         headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36'
         }
         
-        # 匹配当前网站文章链接格式：/section/数字-年-月-日-时-分-秒.html
-        article_pattern = re.compile(r'href="(/[^"]+/\d{4,6}-\d{4}-\d{2}-\d{2}-\d{2}-\d{2}\.html)"[^>]*>([^<]+)</a>', re.I)
+        # 更宽松的匹配，适配当前所有文章链接
+        article_pattern = re.compile(r'href="(/[^"]*?/\d{4,}-\d{4}-\d{2}-\d{2}-\d{2}-\d{2}\.html)"[^>]*>([^<]+)</a>', re.I)
         
         for list_url in urls_to_fetch:
             try:
@@ -133,27 +97,23 @@ class NikkeiRecipe(BasicNewsRecipe):
                 req = urllib.request.Request(list_url, headers=headers)
                 
                 with urllib.request.urlopen(req, timeout=30) as response:
-                    html_content = response.read().decode('utf-8')
+                    html_content = response.read().decode('utf-8', errors='ignore')
                 
                 matches = article_pattern.findall(html_content)
+                self.log.info(f'  找到 {len(matches)} 个潜在链接')
                 
                 for url_suffix, title in matches:
-                    # 清理标题
                     title = re.sub(r'<[^>]+>', '', title).strip()
                     title = re.sub(r'\s+', ' ', title)
                     
-                    # 过滤无效标题
                     if not title or len(title) < 8:
                         continue
-                    
-                    # 过滤导航/广告文字
-                    if any(k in title for k in ['首页', '搜索', '登录', '注册', '更多', '订阅', '欢迎注册', 'HotNews']):
+                    if any(k in title for k in ['首页', '搜索', '登录', '注册', '更多', '订阅', 'HotNews', '欢迎注册']):
                         continue
                     
-                    # 构建完整URL
                     full_url = 'https://cn.nikkei.com' + url_suffix if url_suffix.startswith('/') else url_suffix
                     
-                    if full_url in seen_urls or 'javascript' in full_url.lower():
+                    if full_url in seen_urls:
                         continue
                     
                     seen_urls.add(full_url)
@@ -171,7 +131,7 @@ class NikkeiRecipe(BasicNewsRecipe):
                     break
                     
             except Exception as e:
-                self.log.error(f'抓取列表失败: {str(e)}')
+                self.log.error(f'抓取 {list_url} 失败: {str(e)}')
                 continue
         
         if articles:
@@ -183,21 +143,19 @@ class NikkeiRecipe(BasicNewsRecipe):
         return feeds
 
     def preprocess_html(self, soup):
-        # 修复图片
         for img in soup.find_all('img'):
             for attr in ['data-src', 'data-original', 'src']:
                 src = img.get(attr)
-                if src:
+                if src and src.strip():
                     if src.startswith('//'):
                         src = 'https:' + src
-                    elif src.startswith('/') and not src.startswith('//'):
+                    elif src.startswith('/'):
                         src = 'https://cn.nikkei.com' + src
                     img['src'] = src
                     break
         return soup
 
     def postprocess_html(self, soup, first_fetch):
-        # 恢复标题
         if not soup.find('h1'):
             title_tag = soup.find('title')
             if title_tag:
@@ -206,42 +164,22 @@ class NikkeiRecipe(BasicNewsRecipe):
                 if title and len(title) > 5:
                     new_h1 = soup.new_tag('h1')
                     new_h1.string = title
-                    first_elem = soup.find(['p', 'div'])
+                    first_elem = soup.find(['p', 'div', 'article'])
                     if first_elem:
                         first_elem.insert_before(new_h1)
                     else:
-                        body = soup.find('body')
-                        if body:
-                            body.insert(0, new_h1)
+                        soup.body.insert(0, new_h1) if soup.body else None
         
-        # 移除推荐列表
-        for div in soup.find_all(['div', 'section', 'ul', 'ol']):
-            classes = ' '.join(div.get('class', [])).lower()
-            div_id = div.get('id', '').lower()
+        # 移除推荐
+        for div in soup.find_all(['div', 'section', 'ul']):
             text = div.get_text()
-            
-            is_related = False
-            if any(k in classes or k in div_id for k in ['related', 'recommend', 'suggestion', 'popular', 'trending']):
-                is_related = True
-            if any(k in text for k in ['推荐阅读', '相关文章', '热门文章', '更多文章', '你可能感兴趣']):
-                is_related = True
-            
-            if is_related:
-                links = div.find_all('a')
-                if len(links) >= 3:
-                    div.decompose()
-                    continue
+            if any(k in text for k in ['推荐阅读', '相关文章', '热门', '你可能感兴趣']):
+                div.decompose()
         
-        # 移除下载信息
-        for elem in soup.find_all(string=re.compile(r'downloaded by calibre', re.I)):
-            if elem.parent:
-                elem.parent.decompose()
-        
-        # 简繁转换
         if CAN_CONVERT:
             for elem in soup.find_all(string=True):
                 text = str(elem)
-                if len(text) > 3:
+                if len(text) > 5:
                     parent = elem.parent
                     if parent and parent.name not in ['script', 'style']:
                         try:
@@ -250,7 +188,6 @@ class NikkeiRecipe(BasicNewsRecipe):
                                 elem.replace_with(converted)
                         except:
                             pass
-        
         return soup
 
     def get_cover_url(self):
@@ -258,46 +195,35 @@ class NikkeiRecipe(BasicNewsRecipe):
             width, height = 600, 800
             img = Image.new('RGB', (width, height), color='#1a1a2e')
             draw = ImageDraw.Draw(img)
-            
             font_path = FONT_PATH
             try:
-                if font_path and os.path.exists(font_path):
-                    font_large = ImageFont.truetype(font_path, 72)
-                    font_medium = ImageFont.truetype(font_path, 36)
-                    font_small = ImageFont.truetype(font_path, 28)
-                else:
-                    font_large = font_medium = font_small = ImageFont.load_default()
+                font_large = ImageFont.truetype(font_path, 72) if font_path else ImageFont.load_default()
+                font_medium = ImageFont.truetype(font_path, 36) if font_path else ImageFont.load_default()
+                font_small = ImageFont.truetype(font_path, 28) if font_path else ImageFont.load_default()
             except:
                 font_large = font_medium = font_small = ImageFont.load_default()
             
             draw.rectangle([(50, 200), (550, 205)], fill='#e94560')
-            
             title = '日经'
             subtitle = '中文网'
             date_str = datetime.datetime.now().strftime('%Y年%m月%d日')
             
-            bbox = draw.textbbox((0, 0), title, font=font_large)
-            tw = bbox[2] - bbox[0]
-            draw.text(((width - tw) // 2, 250), title, fill='#ffffff', font=font_large)
+            tw = draw.textbbox((0,0), title, font=font_large)[2]
+            draw.text(((width - tw)//2, 250), title, fill='#ffffff', font=font_large)
             
-            bbox = draw.textbbox((0, 0), subtitle, font=font_medium)
-            sw = bbox[2] - bbox[0]
-            draw.text(((width - sw) // 2, 340), subtitle, fill='#e94560', font=font_medium)
+            sw = draw.textbbox((0,0), subtitle, font=font_medium)[2]
+            draw.text(((width - sw)//2, 340), subtitle, fill='#e94560', font=font_medium)
             
-            bbox = draw.textbbox((0, 0), date_str, font=font_small)
-            dw = bbox[2] - bbox[0]
-            draw.text(((width - dw) // 2, 450), date_str, fill='#ffffff', font=font_small)
+            dw = draw.textbbox((0,0), date_str, font=font_small)[2]
+            draw.text(((width - dw)//2, 450), date_str, fill='#ffffff', font=font_small)
             
-            footer_text = 'Kindle 推送版'
-            bbox = draw.textbbox((0, 0), footer_text, font=font_small)
-            fw = bbox[2] - bbox[0]
-            draw.text(((width - fw) // 2, 700), footer_text, fill='#666666', font=font_small)
+            footer = 'Kindle 推送版'
+            fw = draw.textbbox((0,0), footer, font=font_small)[2]
+            draw.text(((width - fw)//2, 700), footer, fill='#666666', font=font_small)
             
             cover_bytes = BytesIO()
             img.save(cover_bytes, 'JPEG', quality=85)
             cover_bytes.seek(0)
             return cover_bytes.getvalue()
-            
-        except Exception as e:
-            self.log.error(f'封面生成失败: {e}')
+        except:
             return None
