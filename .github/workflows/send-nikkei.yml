@@ -16,7 +16,7 @@ jobs:
         with:
           fetch-depth: 0
 
-      # 安装Chrome浏览器依赖（给selenium无头渲染用）
+      # 安装Chrome浏览器依赖
       - name: Install Chrome & system lib
         run: |
           sudo apt update
@@ -30,15 +30,12 @@ jobs:
       - name: Install all python dependencies
         run: pip install requests beautifulsoup4 opencc-python-reimplemented selenium
 
-      # 配置Chrome驱动环境变量
       - name: Set chromedriver path
         run: echo "CHROME_DRIVER=/usr/lib/chromium-browser/chromedriver" >> $GITHUB_ENV
 
-      # 执行爬虫
       - name: Run crawler
         run: python nikkei.recipe
 
-      # 提交RSS文件
       - name: Commit & Push RSS
         run: |
           git config user.name "github-actions[bot]"
