@@ -4,226 +4,93 @@ from __future__ import unicode_literals, division, absolute_import, print_functi
 import re
 import datetime
 import os
-import subprocess
 import urllib.request
 from io import BytesIO
 from PIL import Image, ImageDraw, ImageFont
 from calibre.web.feeds.news import BasicNewsRecipe
 
-try:
-    from opencc import OpenCC
-    cc = OpenCC('t2s')
-    CAN_CONVERT = True
-except ImportError:
-    CAN_CONVERT = False
-
-def ensure_chinese_font():
-    font_paths = [
-        "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
-        "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc"
-    ]
-    for path in font_paths:
-        if os.path.exists(path):
-            return path
-    print(">>> 未检测到中文字体，正在尝试安装...")
-    try:
-        subprocess.run(["sudo", "apt-get", "update"], check=True, capture_output=True)
-        subprocess.run(["sudo", "apt-get", "install", "-y", "fonts-noto-cjk"], check=True, capture_output=True)
-        subprocess.run(["fc-cache", "-f"], check=True, capture_output=True)
-        for path in font_paths:
-            if os.path.exists(path):
-                return path
-    except Exception as e:
-        print(f">>> 安装字体失败: {e}")
-    return None
-
-FONT_PATH = ensure_chinese_font()
-
 class NikkeiRecipe(BasicNewsRecipe):
-    title = '日经中文网 - ' + datetime.datetime.now().strftime('%Y-%m-%d')
+    title = '日经中文网 ' + datetime.datetime.now().strftime('%Y-%m-%d')
     language = 'zh-CN'
-    oldest_article = 1
-    max_articles_per_feed = 35
+    max_articles_per_feed = 40
+    oldest_article = 2
     auto_cleanup = True
     remove_javascript = True
     compress_news_images = True
-    scale_news_images_to = 600
-    
-    keep_only_tags = [
-        dict(name='h1'),
-        dict(name='article'),
-        dict(name='div', attrs={'class': re.compile(r'article|content|story|post|entry|body|main', re.I)}),
-        dict(name='main'),
-    ]
-
-    remove_tags = [
-        dict(name='script'), dict(name='style'), dict(name='iframe'),
-        dict(name='nav'), dict(name='header'), dict(name='footer'),
-        dict(name='aside'),
-        dict(name='div', attrs={'class': re.compile(r'ad|advertisement|sponsor|promo|banner|share|social|related|recommend|sidebar', re.I)}),
-        dict(name='div', attrs={'id': re.compile(r'ad|advertisement|sponsor|promo|banner|share|social|related|recommend|sidebar', re.I)}),
-    ]
 
     extra_css = '''
-        body { font-family: "Noto Sans CJK SC", "PingFang SC", "Microsoft YaHei", sans-serif; line-height: 1.8; font-size: 16px; color: #333; max-width: 700px; margin: 0 auto; padding: 20px; }
-        h1 { font-size: 24px; font-weight: bold; margin: 20px 0 10px 0; color: #1a1a2e; line-height: 1.4; }
-        h2 { font-size: 20px; font-weight: bold; margin: 15px 0 8px 0; color: #2d2d44; }
-        p { margin: 10px 0; text-indent: 2em; text-align: justify; }
-        img { max-width: 100%; height: auto; display: block; margin: 10px auto; }
+        body { font-family: "Noto Sans CJK SC", sans-serif; line-height: 1.8; font-size: 16px; }
+        h1 { font-size: 24px; margin: 20px 0; }
+        p { text-indent: 2em; text-align: justify; }
+        img { max-width: 100%; height: auto; display: block; margin: 15px auto; }
     '''
 
     def parse_index(self):
-        feeds = []
         articles = []
-        seen_urls = set()
+        seen = set()
         
-        urls_to_fetch = [
+        urls = [
             'https://cn.nikkei.com/',
             'https://cn.nikkei.com/china/',
             'https://cn.nikkei.com/politicsaeconomy/',
             'https://cn.nikkei.com/industry/',
         ]
         
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36'
-        }
+        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
         
-        # 更宽松的匹配，适配当前所有文章链接
-        article_pattern = re.compile(r'href="(/[^"]*?/\d{4,}-\d{4}-\d{2}-\d{2}-\d{2}-\d{2}\.html)"[^>]*>([^<]+)</a>', re.I)
+        pattern = re.compile(r'href="(/[^"]*?/\d+-\d{4}-\d{2}-\d{2}-\d{2}-\d{2}\.html)"[^>]*>([^<]+)</a>', re.I)
         
-        for list_url in urls_to_fetch:
+        for base_url in urls:
             try:
-                self.log.info(f'正在抓取列表: {list_url}')
-                req = urllib.request.Request(list_url, headers=headers)
+                req = urllib.request.Request(base_url, headers=headers)
+                with urllib.request.urlopen(req, timeout=20) as resp:
+                    html = resp.read().decode('utf-8', errors='ignore')
                 
-                with urllib.request.urlopen(req, timeout=30) as response:
-                    html_content = response.read().decode('utf-8', errors='ignore')
-                
-                matches = article_pattern.findall(html_content)
-                self.log.info(f'  找到 {len(matches)} 个潜在链接')
-                
-                for url_suffix, title in matches:
-                    title = re.sub(r'<[^>]+>', '', title).strip()
-                    title = re.sub(r'\s+', ' ', title)
+                for match in pattern.findall(html):
+                    url_suffix, title = match
+                    title = re.sub(r'\s+', ' ', title.strip())
                     
-                    if not title or len(title) < 8:
-                        continue
-                    if any(k in title for k in ['首页', '搜索', '登录', '注册', '更多', '订阅', 'HotNews', '欢迎注册']):
+                    if len(title) < 10 or any(x in title for x in ['首页','搜索','登录','注册','订阅']):
                         continue
                     
-                    full_url = 'https://cn.nikkei.com' + url_suffix if url_suffix.startswith('/') else url_suffix
-                    
-                    if full_url in seen_urls:
+                    full_url = 'https://cn.nikkei.com' + url_suffix
+                    if full_url in seen:
                         continue
+                    seen.add(full_url)
                     
-                    seen_urls.add(full_url)
                     articles.append({
                         'title': title,
                         'url': full_url,
-                        'date': '',
-                        'description': ''
+                        'description': '',
+                        'date': ''
                     })
                     
                     if len(articles) >= self.max_articles_per_feed:
                         break
-                
-                if len(articles) >= self.max_articles_per_feed:
-                    break
-                    
             except Exception as e:
-                self.log.error(f'抓取 {list_url} 失败: {str(e)}')
-                continue
+                self.log.error(f'抓取失败 {base_url}: {e}')
         
-        if articles:
-            feeds.append(('日经中文网', articles[:self.max_articles_per_feed]))
-            self.log.info(f'✅ 成功抓取 {len(articles[:self.max_articles_per_feed])} 篇文章')
-        else:
-            self.log.warning('⚠️ 未抓到任何文章')
-        
-        return feeds
+        self.log.info(f'成功抓取 {len(articles)} 篇文章')
+        return [('日经中文网', articles)]
 
     def preprocess_html(self, soup):
         for img in soup.find_all('img'):
-            for attr in ['data-src', 'data-original', 'src']:
-                src = img.get(attr)
-                if src and src.strip():
-                    if src.startswith('//'):
-                        src = 'https:' + src
-                    elif src.startswith('/'):
-                        src = 'https://cn.nikkei.com' + src
-                    img['src'] = src
-                    break
-        return soup
-
-    def postprocess_html(self, soup, first_fetch):
-        if not soup.find('h1'):
-            title_tag = soup.find('title')
-            if title_tag:
-                title = title_tag.get_text(strip=True)
-                title = re.sub(r'\s*[|•-]\s*日经中文网.*$', '', title).strip()
-                if title and len(title) > 5:
-                    new_h1 = soup.new_tag('h1')
-                    new_h1.string = title
-                    first_elem = soup.find(['p', 'div', 'article'])
-                    if first_elem:
-                        first_elem.insert_before(new_h1)
-                    else:
-                        soup.body.insert(0, new_h1) if soup.body else None
-        
-        # 移除推荐
-        for div in soup.find_all(['div', 'section', 'ul']):
-            text = div.get_text()
-            if any(k in text for k in ['推荐阅读', '相关文章', '热门', '你可能感兴趣']):
-                div.decompose()
-        
-        if CAN_CONVERT:
-            for elem in soup.find_all(string=True):
-                text = str(elem)
-                if len(text) > 5:
-                    parent = elem.parent
-                    if parent and parent.name not in ['script', 'style']:
-                        try:
-                            converted = cc.convert(text)
-                            if converted != text:
-                                elem.replace_with(converted)
-                        except:
-                            pass
+            src = img.get('src') or img.get('data-src')
+            if src and src.startswith('/'):
+                img['src'] = 'https://cn.nikkei.com' + src
         return soup
 
     def get_cover_url(self):
         try:
-            width, height = 600, 800
-            img = Image.new('RGB', (width, height), color='#1a1a2e')
+            img = Image.new('RGB', (600, 800), color='#1a1a2e')
             draw = ImageDraw.Draw(img)
-            font_path = FONT_PATH
-            try:
-                font_large = ImageFont.truetype(font_path, 72) if font_path else ImageFont.load_default()
-                font_medium = ImageFont.truetype(font_path, 36) if font_path else ImageFont.load_default()
-                font_small = ImageFont.truetype(font_path, 28) if font_path else ImageFont.load_default()
-            except:
-                font_large = font_medium = font_small = ImageFont.load_default()
-            
-            draw.rectangle([(50, 200), (550, 205)], fill='#e94560')
-            title = '日经'
-            subtitle = '中文网'
-            date_str = datetime.datetime.now().strftime('%Y年%m月%d日')
-            
-            tw = draw.textbbox((0,0), title, font=font_large)[2]
-            draw.text(((width - tw)//2, 250), title, fill='#ffffff', font=font_large)
-            
-            sw = draw.textbbox((0,0), subtitle, font=font_medium)[2]
-            draw.text(((width - sw)//2, 340), subtitle, fill='#e94560', font=font_medium)
-            
-            dw = draw.textbbox((0,0), date_str, font=font_small)[2]
-            draw.text(((width - dw)//2, 450), date_str, fill='#ffffff', font=font_small)
-            
-            footer = 'Kindle 推送版'
-            fw = draw.textbbox((0,0), footer, font=font_small)[2]
-            draw.text(((width - fw)//2, 700), footer, fill='#666666', font=font_small)
-            
-            cover_bytes = BytesIO()
-            img.save(cover_bytes, 'JPEG', quality=85)
-            cover_bytes.seek(0)
-            return cover_bytes.getvalue()
+            font = ImageFont.load_default()
+            date = datetime.datetime.now().strftime('%Y年%m月%d日')
+            draw.text((150, 300), "日经中文网", fill="white", font=font)
+            draw.text((150, 400), date, fill="white", font=font)
+            bio = BytesIO()
+            img.save(bio, 'JPEG')
+            bio.seek(0)
+            return bio.getvalue()
         except:
             return None
