@@ -107,12 +107,11 @@ class NikkeiRecipe(BasicNewsRecipe):
     '''
 
     def parse_index(self):
-        """从日经中文网首页抓取文章列表"""
+        """从日经中文网首页抓取文章列表 - 适配2026新结构"""
         feeds = []
         articles = []
         seen_urls = set()
         
-        # 日经中文网首页
         urls_to_fetch = [
             'https://cn.nikkei.com/',
             'https://cn.nikkei.com/china/',
@@ -122,8 +121,11 @@ class NikkeiRecipe(BasicNewsRecipe):
         ]
         
         headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36'
         }
+        
+        # 匹配当前网站文章链接格式：/section/数字-年-月-日-时-分-秒.html
+        article_pattern = re.compile(r'href="(/[^"]+/\d{4,6}-\d{4}-\d{2}-\d{2}-\d{2}-\d{2}\.html)"[^>]*>([^<]+)</a>', re.I)
         
         for list_url in urls_to_fetch:
             try:
@@ -133,9 +135,6 @@ class NikkeiRecipe(BasicNewsRecipe):
                 with urllib.request.urlopen(req, timeout=30) as response:
                     html_content = response.read().decode('utf-8')
                 
-                # 提取文章链接 - 日经中文网文章格式: /article/数字.html
-                # 或 /article/数字/ 或 /news/数字.html
-                article_pattern = re.compile(r'<a[^>]*href="(/(?:article|news)/[^"]+)"[^>]*>([^<]+)</a>', re.I)
                 matches = article_pattern.findall(html_content)
                 
                 for url_suffix, title in matches:
@@ -144,20 +143,17 @@ class NikkeiRecipe(BasicNewsRecipe):
                     title = re.sub(r'\s+', ' ', title)
                     
                     # 过滤无效标题
-                    if not title or len(title) < 10:
+                    if not title or len(title) < 8:
                         continue
                     
-                    # 过滤导航文字
-                    if any(k in title for k in ['首页', '新闻', '专栏', '搜索', '登录', '注册', '更多']):
+                    # 过滤导航/广告文字
+                    if any(k in title for k in ['首页', '搜索', '登录', '注册', '更多', '订阅', '欢迎注册', 'HotNews']):
                         continue
                     
                     # 构建完整URL
-                    if url_suffix.startswith('/'):
-                        full_url = 'https://cn.nikkei.com' + url_suffix
-                    else:
-                        full_url = url_suffix
+                    full_url = 'https://cn.nikkei.com' + url_suffix if url_suffix.startswith('/') else url_suffix
                     
-                    if full_url in seen_urls:
+                    if full_url in seen_urls or 'javascript' in full_url.lower():
                         continue
                     
                     seen_urls.add(full_url)
@@ -189,19 +185,15 @@ class NikkeiRecipe(BasicNewsRecipe):
     def preprocess_html(self, soup):
         # 修复图片
         for img in soup.find_all('img'):
-            src = img.get('data-src') or img.get('src', '')
-            if src:
-                if src.startswith('//'):
-                    src = 'https:' + src
-                elif src.startswith('/') and not src.startswith('//'):
-                    src = 'https://cn.nikkei.com' + src
-                img['src'] = src
-        
-        # 日经文章主体通常在 article 或 div.content 中
-        text_container = soup.find('article') or soup.find('div', class_='content')
-        if text_container:
-            soup = text_container
-        
+            for attr in ['data-src', 'data-original', 'src']:
+                src = img.get(attr)
+                if src:
+                    if src.startswith('//'):
+                        src = 'https:' + src
+                    elif src.startswith('/') and not src.startswith('//'):
+                        src = 'https://cn.nikkei.com' + src
+                    img['src'] = src
+                    break
         return soup
 
     def postprocess_html(self, soup, first_fetch):
