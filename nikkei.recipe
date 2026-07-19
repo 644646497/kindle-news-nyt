@@ -8,7 +8,6 @@ from opencc import OpenCC
 from bs4 import BeautifulSoup
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
-from selenium.webdriver.common.by import By
 from selenium.webdriver.chrome.options import Options
 
 # 配置
@@ -56,14 +55,13 @@ def get_driver():
     chrome_options.add_argument("--disable-blink-features=AutomationControlled")
     chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
     chrome_options.add_experimental_option("useAutomationExtension", False)
-    # 读取action中配置的驱动路径
     driver_path = os.environ.get("CHROME_DRIVER", "/usr/lib/chromium-browser/chromedriver")
     service = Service(driver_path)
     driver = webdriver.Chrome(service=service, options=chrome_options)
     driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
     return driver
 
-# 使用浏览器加载完整渲染页面
+# 加载渲染页面
 def get_rendered_html(url, driver, wait_sec=3):
     try:
         driver.get(url)
@@ -74,7 +72,7 @@ def get_rendered_html(url, driver, wait_sec=3):
         print(f"Load page fail {url}: {e}")
         return None
 
-# 提取新闻链接（仅/article/文章）
+# 提取新闻链接
 def extract_article_list(html, global_seen):
     soup = BeautifulSoup(html, 'html.parser')
     page_articles = []
@@ -89,7 +87,6 @@ def extract_article_list(html, global_seen):
             continue
         if any(w in title_raw for w in ban_words):
             continue
-        # 补全链接
         if href.startswith('/'):
             full_link = BASE_URL + href
         elif href.startswith("http") and BASE_URL in href:
@@ -111,7 +108,6 @@ def get_article_content(url, driver):
     if not html:
         return f"原文加载失败，访问链接查看：{url}"
     soup = BeautifulSoup(html, 'html.parser')
-    # 清理无用标签
     for tag in soup(["script", "style", "iframe", "nav", "footer", "aside", "header"]):
         tag.decompose()
     content_blocks = soup.find_all('p')
@@ -123,7 +119,6 @@ def get_article_content(url, driver):
             content_text += para_cn + "\n\n"
     if len(content_text) < 50:
         content_text = soup.get_text(strip=True)
-    # 截断适配Kindle
     if len(content_text) > 6000:
         content_text = content_text[:5900] + f"...内容过长截断，原文：{url}"
     return content_text
@@ -156,4 +151,36 @@ def fetch_and_build_rss():
         all_articles = all_articles[:MAX_ARTICLE_NUM]
         print(f"\nTotal fetched articles: {len(all_articles)}, start fetch content...")
         rss_items = []
-        build_time = datet
+        build_time = datetime.now(timezone.utc).strftime("%a, %d %b %Y %H:%M:%S GMT")
+        for idx, art in enumerate(all_articles):
+            print(f"[{idx+1}/{len(all_articles)}] {art['title']}")
+            content = get_article_content(art['url'], driver)
+            time.sleep(ARTICLE_SLEEP)
+            item_xml = f"""
+<item>
+<title>{escape_xml(art['title'])}</title>
+<link>{escape_xml(art['url'])}</link>
+<description><![CDATA[{cdata_clean(content)}]]></description>
+<pubDate>{build_time}</pubDate>
+</item>
+"""
+            rss_items.append(item_xml)
+        full_rss = f"""<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+<channel>
+<title>日经中文网（简体自动抓取）</title>
+<link>{BASE_URL}</link>
+<description>JS动态页面渲染抓取，繁体转简体，适配Kindle推送</description>
+<lastBuildDate>{build_time}</lastBuild>
+{"".join(rss_items)}
+</channel>
+</rss>
+"""
+        with open(OUTPUT_FILE, 'w', encoding='utf-8') as f:
+            f.write(full_rss)
+        print(f"\n✅ RSS file generated: {OUTPUT_FILE}")
+    finally:
+        driver.quit()
+
+if __name__ == '__main__':
+    fetch_and_build_rss()
