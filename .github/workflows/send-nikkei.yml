@@ -2,7 +2,7 @@ name: Send Nikkei News to Kindle
 
 on:
   schedule:
-    - cron: '0 21 * * *'
+    - cron: '0 21 * * *'   # 北京时间每天晚上21点
   workflow_dispatch:
 
 jobs:
@@ -11,13 +11,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Calibre and dependencies
+      - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y calibre
+          sudo apt-get install -y calibre fonts-noto-cjk
           pip install opencc-python-reimplemented
 
-      - name: Generate and Send
+      - name: Generate EPUB and Send to Kindle
         env:
           FROM: ${{ secrets.FROM }}
           TO: ${{ secrets.TO }}
@@ -25,29 +25,29 @@ jobs:
           PORT: ${{ secrets.PORT }}
           SECRET: ${{ secrets.SECRET }}
         run: |
-          ebook-convert nikkei.recipe nikkei_news.epub --output-profile kindle
+          ebook-convert nikkei.recipe nikkei_news.epub --output-profile kindle --no-chapters-in-toc
 
           python3 -c '
-          import smtplib, os
-          from email.mime.multipart import MIMEMultipart
-          from email.mime.base import MIMEBase
-          from email import encoders
-          from datetime import datetime
+import smtplib, os
+from email.mime.multipart import MIMEMultipart
+from email.mime.base import MIMEBase
+from email import encoders
+from datetime import datetime
 
-          msg = MIMEMultipart()
-          msg["From"] = os.environ["FROM"]
-          msg["To"] = os.environ["TO"]
-          msg["Subject"] = f"日经中文网 {datetime.now().strftime("%Y-%m-%d")}"
+msg = MIMEMultipart()
+msg["From"] = os.environ["FROM"]
+msg["To"] = os.environ["TO"]
+msg["Subject"] = f"日经中文网 {datetime.now().strftime("%Y-%m-%d")}"
 
-          with open("nikkei_news.epub", "rb") as f:
-              part = MIMEBase("application", "epub+zip")
-              part.set_payload(f.read())
-              encoders.encode_base64(part)
-              part.add_header("Content-Disposition", "attachment", filename="日经中文网.epub")
-              msg.attach(part)
+with open("nikkei_news.epub", "rb") as f:
+    part = MIMEBase("application", "epub+zip")
+    part.set_payload(f.read())
+    encoders.encode_base64(part)
+    part.add_header("Content-Disposition", "attachment", filename="日经中文网.epub")
+    msg.attach(part)
 
-          with smtplib.SMTP_SSL(os.environ["SMTP"], int(os.environ["PORT"])) as server:
-              server.login(os.environ["FROM"], os.environ["SECRET"])
-              server.send_message(msg)
-          print("日经中文网推送完成")
+with smtplib.SMTP_SSL(os.environ["SMTP"], int(os.environ["PORT"])) as server:
+    server.login(os.environ["FROM"], os.environ["SECRET"])
+    server.send_message(msg)
+print("推送完成")
           '
