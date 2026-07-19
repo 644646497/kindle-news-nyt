@@ -1,216 +1,68 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-import re
 import requests
-from bs4 import BeautifulSoup
-from datetime import datetime, timezone
 from opencc import OpenCC
-import time
-import os
+from datetime import datetime, timezone
+import xml.etree.ElementTree as ET
 
-# 全局配置
-OUTPUT_FILE = 'nikkei_feed.xml'
-MAX_ARTICLE_NUM = 30
-PAGE_SLEEP = 1.5
-ARTICLE_SLEEP = 1
-MAX_RETRY = 3
+OUTPUT_FILE = "nikkei_feed.xml"
+# 官方RSS地址
+RSS_SOURCE = "https://cn.nikkei.com/rss/news.rss"
 
-# 初始化繁简转换
+# 繁简转换
 try:
-    cc = OpenCC('t2s')
-except Exception as e:
-    print(f"【致命错误】OpenCC 初始化失败: {e}")
+    cc = OpenCC("t2s")
+except:
     class FakeCC:
         def convert(self, x):
             return x
     cc = FakeCC()
 
-BASE_URL = 'https://cn.nikkei.com'
-
-# XML 转义函数
+# XML转义
 def escape_xml(text):
     if not text:
-        return ''
+        return ""
     s = str(text)
-    s = s.replace('&', '&amp;')
-    s = s.replace('<', '&lt;')
-    s = s.replace('>', '&gt;')
-    s = s.replace('"', '&quot;')
-    s = s.replace("'", '&apos;')
+    s = s.replace('&','&amp;').replace('<','&lt;').replace('>','&gt;')
+    s = s.replace('"','&quot;').replace("'",'&apos;')
     return s
 
-# CDATA 安全处理
-def cdata_clean(text):
-    if not text:
-        return ""
-    return str(text).replace("]]>", "]]&gt;")
-
-# 带重试网页请求
-def fetch_with_retry(url, max_retries=MAX_RETRY):
-    headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Accept-Language': 'zh-CN,zh;q=0.9',
-        'Referer': BASE_URL
-    }
-    for i in range(max_retries):
-        try:
-            resp = requests.get(url, headers=headers, timeout=30)
-            resp.raise_for_status()
-            return resp.text
-        except requests.exceptions.HTTPError as he:
-            if resp and resp.status_code in [403,404,429]:
-                print(f"页面访问受限 code:{resp.status_code} url:{url}")
-                break
-            print(f"请求失败 重试{i+1}/{max_retries} url:{url} err:{he}")
-            time.sleep(2)
-        except Exception as e:
-            print(f"网络异常 重试{i+1}/{max_retries} url:{url} err:{e}")
-            time.sleep(2)
-    return None
-
-# 【修复核心】新版页面新闻提取函数
-def extract_article_list(url, global_seen):
-    html = fetch_with_retry(url)
-    if not html:
-        return []
-    soup = BeautifulSoup(html, 'html.parser')
-    page_articles = []
-    # 缩小黑名单，只过滤导航专用词
-    ban_words = ['登录', '注册', '首页导航', '网站导航']
-
-    # 方案：优先抓取带新闻标题class的容器（日经新版页面）
-    news_containers = soup.find_all(class_=re.compile("title|news-item|article"))
-    for container in news_containers:
-        a_tag = container.find('a', href=True)
-        if not a_tag:
-            continue
-        href = a_tag['href'].strip()
-        title_raw = a_tag.get_text(strip=True)
-        # 放宽标题长度限制，短资讯也保留
-        if len(title_raw) < 4:
-            continue
-        if any(word in title_raw for word in ban_words):
-            continue
-        # 拼接完整链接
-        if href.startswith('/'):
-            full_link = BASE_URL + href
-        elif href.startswith('http') and BASE_URL in href:
-            full_link = href
-        else:
-            continue
-        if full_link in global_seen:
-            continue
-        global_seen.add(full_link)
-        title_cn = cc.convert(title_raw)
-        page_articles.append({"title": title_cn, "url": full_link})
-        if len(page_articles) >= MAX_ARTICLE_NUM:
-            break
-
-    # 兜底：容器匹配失败则遍历全部a标签
-    if len(page_articles) == 0:
-        all_links = soup.find_all('a', href=True)
-        for a in all_links:
-            href = a['href'].strip()
-            title_raw = a.get_text(strip=True)
-            if len(title_raw) < 6:
-                continue
-            if any(word in title_raw for word in ban_words):
-                continue
-            if "/article/" not in href and "/news/" not in href:
-                continue
-            if href.startswith('/'):
-                full_link = BASE_URL + href
-            elif href.startswith('http') and BASE_URL in href:
-                full_link = href
-            else:
-                continue
-            if full_link in global_seen:
-                continue
-            global_seen.add(full_link)
-            title_cn = cc.convert(title_raw)
-            page_articles.append({"title": title_cn, "url": full_link})
-            if len(page_articles) >= MAX_ARTICLE_NUM:
-                break
-    return page_articles
-
-# 抓取单篇正文
-def get_article_content(url):
-    html = fetch_with_retry(url)
-    if not html:
-        return "原文读取失败，请访问链接查看完整内容：" + url
-    soup = BeautifulSoup(html, 'html.parser')
-    # 清除无关标签
-    for tag in soup(["script", "style", "iframe", "nav", "footer", "aside", "header"]):
-        tag.decompose()
-    # 提取正文区域
-    content_blocks = soup.find_all('p')
-    content_text = ""
-    for p in content_blocks:
-        para = p.get_text(strip=True)
-        if len(para) > 10:
-            para_cn = cc.convert(para)
-            content_text += para_cn + "\n\n"
-    # 兜底全文
-    if len(content_text) < 50:
-        content_text = soup.get_text(strip=True)
-    # Kindle长度限制截断
-    if len(content_text) > 6000:
-        content_text = content_text[:5900] + "...（内容过长已截断，原文链接：" + url + "）"
-    return content_text
-
-# 主生成逻辑
-def fetch_and_build_rss():
-    print("===== 开始抓取日经中文网 RSS（适配Kindle推送） =====")
-    crawl_pages = [
-        BASE_URL,
-        BASE_URL + "/china/",
-        BASE_URL + "/economy/",
-        BASE_URL + "/tech/",
-        BASE_URL + "/opinion/"
-    ]
-    all_articles = []
-    seen_urls = set()
-    for page in crawl_pages:
-        print(f"\n正在抓取栏目：{page}")
-        page_data = extract_article_list(page, seen_urls)
-        all_articles.extend(page_data)
-        print(f"当前累计新闻：{len(all_articles)}")
-        time.sleep(PAGE_SLEEP)
-        if len(all_articles) >= MAX_ARTICLE_NUM:
-            break
-    all_articles = all_articles[:MAX_ARTICLE_NUM]
-    print(f"\n共获取 {len(all_articles)} 篇新闻，开始抓取正文...")
-    rss_items = []
+# 拉取官方RSS并简体化
+def build_rss():
+    resp = requests.get(RSS_SOURCE, timeout=20)
+    root = ET.fromstring(resp.content)
+    ns = {"rss": "http://purl.org/rss/1.0/modules/content/"}
+    items_xml = ""
     build_time = datetime.now(timezone.utc).strftime("%a, %d %b %Y %H:%M:%S GMT")
-    for idx, art in enumerate(all_articles):
-        print(f"[{idx+1}/{len(all_articles)}] 抓取：{art['title']}")
-        content = get_article_content(art['url'])
-        time.sleep(ARTICLE_SLEEP)
-        item_xml = f"""
+    for item in root.findall(".//item"):
+        title = cc.convert(item.find("title").text or "")
+        link = item.find("link").text or ""
+        desc_raw = item.find("description").text or ""
+        desc = cc.convert(desc_raw).replace("]]>", "]]&gt;")
+        pubdate = item.find("pubDate").text or build_time
+        item_str = f"""
 <item>
-<title>{escape_xml(art['title'])}</title>
-<link>{escape_xml(art['url'])}</link>
-<description><![CDATA[{cdata_clean(content)}]]></description>
-<pubDate>{build_time}</pubDate>
+<title>{escape_xml(title)}</title>
+<link>{escape_xml(link)}</link>
+<description><![CDATA[{desc}]]></description>
+<pubDate>{pubdate}</pubDate>
 </item>
 """
-        rss_items.append(item_xml)
-    full_rss = f"""<?xml version="1.0" encoding="UTF-8"?>
+        items_xml += item_str
+    final_xml = f"""<?xml version="1.0" encoding="UTF-8"?>
 <rss version="2.0">
 <channel>
 <title>日经中文网（简体）</title>
-<link>{BASE_URL}</link>
-<description>自动抓取日经中文网新闻，繁体转简体，适配Kindle推送</description>
+<link>https://cn.nikkei.com</link>
+<description>日经官方RSS自动转简体，适配Kindle推送</description>
 <lastBuildDate>{build_time}</lastBuild>
-{"".join(rss_items)}
+{items_xml}
 </channel>
 </rss>
 """
-    with open(OUTPUT_FILE, 'w', encoding='utf-8') as f:
-        f.write(full_rss)
-    if os.path.exists("debug_page.html"):
-        os.remove("debug_page.html")
-    print(f"\n✅ RSS生成完成！输出文件：{OUTPUT_FILE}，可直接用于Kindle推送")
+    with open(OUTPUT_FILE, "w", encoding="utf-8") as f:
+        f.write(final_xml)
+    print("✅ 官方RSS转换完成")
 
-if __name__ == '__main__':
-    fetch_and_build_rss()
+if __name__ == "__main__":
+    build_rss()
