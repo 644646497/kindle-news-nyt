@@ -16,33 +16,31 @@ jobs:
         with:
           fetch-depth: 0
 
-      # 解决opencc编译依赖
+      # 安装opencc编译依赖
       - name: Install opencc系统库
         run: sudo apt update && sudo apt install -y libopencc-dev
 
-      # 移除cache:pip 消除requirements.txt警告
       - name: Setup Python3.10
         uses: actions/setup-python@v5
         with:
           python-version: "3.10"
 
-      - name: 安装爬虫依赖
+      - name: 安装爬虫依赖包
         run: pip install requests beautifulsoup4 opencc-python-reimplemented
 
-      # 执行日经RSS生成脚本
+      # 执行你的脚本文件 nikkei.recipe
       - name: 运行爬虫生成nikkei_feed.xml
-        run: python nikkei_rss.py
+        run: python nikkei.recipe
 
-      # 自动提交更新后的RSS供给Kindle读取
-      - name: 推送RSS文件到仓库
+      # 自动提交更新后的RSS文件
+      - name: 推送RSS源至仓库
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add nikkei_feed.xml
-          # 无更新跳过提交，减少仓库提交记录
           if git diff --quiet --staged; then
-            echo "RSS无新内容，跳过推送，等待下次定时抓取"
+            echo "RSS无新内容，跳过本次提交"
           else
-            git commit -m "[Auto] 更新日经RSS源 用于Kindle推送 $(date -u +'%Y-%m-%d %H:%M UTC')"
+            git commit -m "[Auto Kindle] 自动更新日经中文RSS $(date -u +'%Y-%m-%d %H:%M UTC')"
             git push origin HEAD
           fi
