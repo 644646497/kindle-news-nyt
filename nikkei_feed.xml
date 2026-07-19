@@ -1,10 +1,10 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <rss version="2.0">
 <channel>
-<title>日经中文网（简体）</title>
+<title>日经中文网（简体自动抓取）</title>
 <link>https://cn.nikkei.com</link>
-<description>自动抓取日经中文网新闻，繁体转简体，适配Kindle推送</description>
-<lastBuildDate>Sun, 19 Jul 2026 18:41:53 GMT</lastBuild>
+<description>JS动态页面渲染抓取，繁体转简体，适配Kindle推送</description>
+<lastBuildDate>Sun, 19 Jul 2026 18:54:00 GMT</lastBuild>
 
 </channel>
 </rss>
