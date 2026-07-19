@@ -1,110 +1,282 @@
 #!/usr/bin/env python
-# vim:fileencoding=utf-8
-from __future__ import unicode_literals, division, absolute_import, print_function
+# -*- coding: utf-8 -*-
 import re
-import datetime
+import requests
+from bs4 import BeautifulSoup
+from datetime import datetime, timezone
+from opencc import OpenCC
+import time
 import os
-import urllib.request
-from io import BytesIO
-from PIL import Image, ImageDraw, ImageFont
-from calibre.web.feeds.news import BasicNewsRecipe
 
-class NikkeiRecipe(BasicNewsRecipe):
-    title = '日经中文网 ' + datetime.datetime.now().strftime('%Y-%m-%d')
-    language = 'zh-CN'
-    max_articles_per_feed = 40
-    oldest_article = 2
-    auto_cleanup = True
-    remove_javascript = True
-    compress_news_images = True
-    # 自动清理多余广告标签
-    remove_tags = [dict(class_=['ad', 'banner', 'recommend', 'related_box'])]
+# 全局配置
+OUTPUT_FILE = 'nikkei_feed.xml'
+MAX_ARTICLE_NUM = 30
+PAGE_SLEEP = 1.2
+ARTICLE_SLEEP = 0.8
+MAX_RETRY = 3
 
-    extra_css = '''
-        body { font-family: "Noto Sans CJK SC", sans-serif; line-height: 1.8; font-size: 16px; }
-        h1 { font-size: 24px; margin: 20px 0; }
-        p { text-indent: 2em; text-align: justify; }
-        img { max-width: 100%; height: auto; display: block; margin: 15px auto; }
-    '''
+# 初始化繁简转换，增加异常捕获
+try:
+    cc = OpenCC('t2s')
+except Exception as e:
+    print(f"【致命错误】OpenCC 初始化失败: {e}")
+    cc = None
 
-    def parse_index(self):
-        articles = []
-        seen = set()
-        
-        urls = [
-            'https://cn.nikkei.com/',
-            'https://cn.nikkei.com/china/',
-            'https://cn.nikkei.com/politicsaeconomy/',
-            'https://cn.nikkei.com/industry/',
-        ]
-        
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-        }
-        # 更新正则：适配当前日经链接 /xxx/2026-07-20-xxxx.html
-        pattern = re.compile(r'href="(/[^"]*?/\d{4}-\d{2}-\d{2}-\d+\.html)"[^>]*>([^<]+)</a>', re.I)
+BASE_URL = 'https://cn.nikkei.com'
 
-        for base_url in urls:
-            try:
-                req = urllib.request.Request(base_url, headers=headers)
-                with urllib.request.urlopen(req, timeout=20) as resp:
-                    html = resp.read().decode('utf-8', errors='ignore')
-                
-                for match in pattern.findall(html):
-                    url_suffix, title = match
-                    title = re.sub(r'\s+', ' ', title.strip())
-                    
-                    # 过滤导航、无用链接
-                    if len(title) < 10 or any(k in title for k in ['首页','搜索','登录','注册','订阅','广告']):
-                        continue
-                    
-                    full_url = 'https://cn.nikkei.com' + url_suffix
-                    if full_url in seen:
-                        continue
-                    seen.add(full_url)
-                    
-                    articles.append({
-                        'title': title,
-                        'url': full_url,
-                        'description': '',
-                        'date': datetime.datetime.now()
-                    })
-                    
-                    if len(articles) >= self.max_articles_per_feed:
-                        break
-            except Exception as e:
-                self.log.error(f'抓取栏目失败 {base_url}: {str(e)}')
-        
-        self.log.info(f'本次共抓取有效文章 {len(articles)} 篇')
-        return [('日经中文网资讯', articles)]
+# XML 转义函数（完整5种符号转义）
+def escape_xml(text):
+    if not text:
+        return ''
+    s = str(text)
+    s = s.replace('&', '&amp;')
+    s = s.replace('<', '&lt;')
+    s = s.replace('>', '&gt;')
+    s = s.replace('"', '&quot;')
+    s = s.replace("'", '&apos;')
+    return s
 
-    def preprocess_html(self, soup):
-        # 补全相对图片地址
-        for img in soup.find_all('img'):
-            src = img.get('data-src') or img.get('src')
-            if src and src.startswith('/'):
-                img['src'] = f'https://cn.nikkei.com{src}'
-        return soup
+# CDATA 安全处理，解决原文包含 ]]> 破坏XML问题
+def cdata_clean(text):
+    if not text:
+        return ""
+    return str(text).replace("]]>", "]]&gt;")
 
-    def get_cover_url(self):
+# 带重试请求封装
+def fetch_with_retry(url, max_retries=MAX_RETRY):
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+        'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
+        'Referer': 'https://cn.nikkei.com/',
+    }
+    for i in range(max_retries):
         try:
-            width, height = 600, 800
-            img = Image.new('RGB', (width, height), color='#1a1a2e')
-            draw = ImageDraw.Draw(img)
-            # 加载系统中文字体兜底
-            try:
-                font_big = ImageFont.truetype("/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc", 48)
-                font_small = ImageFont.truetype("/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc", 28)
-            except:
-                font_big = ImageFont.load_default()
-                font_small = ImageFont.load_default()
-            date_str = datetime.datetime.now().strftime('%Y年%m月%d日')
-            draw.text((120, 320), "日经中文网", fill="white", font=font_big)
-            draw.text((160, 420), date_str, fill="#cccccc", font=font_small)
-            bio = BytesIO()
-            img.save(bio, 'JPEG', quality=85)
-            bio.seek(0)
-            return bio.getvalue()
+            resp = requests.get(url, headers=headers, timeout=30)
+            resp.raise_for_status()
+            return resp
+        except requests.exceptions.HTTPError as he:
+            # 403/404 不重试，直接跳过
+            if resp and resp.status_code in [403, 404, 429]:
+                print(f"  页面限制访问 code:{resp.status_code}")
+                break
+            if i == max_retries - 1:
+                raise
+            time.sleep(2)
         except Exception as e:
-            self.log.warn(f'封面生成失败: {e}')
-            return None
+            if i == max_retries - 1:
+                raise
+            time.sleep(2)
+    return None
+
+# 单页面提取文章列表（优化去重逻辑）
+def extract_articles_from_page(url, global_seen: set):
+    try:
+        resp = fetch_with_retry(url)
+        if not resp:
+            return []
+        soup = BeautifulSoup(resp.text, 'html.parser')
+        page_articles = []
+
+        article_patterns = [
+            '/article/', '/news/', '/columnviewpoint/', '/politicsaeconomy/',
+            '/industry/', '/china/', '/world/', '/tech/', '/economy/', '/opinion/', '.html'
+        ]
+        ban_title_words = ['首页', '新闻', '专栏', '搜索', '登录', '注册', '更多', 'RSS', '评论', '专题', '菜单', '返回']
+
+        for a in soup.find_all('a', href=True):
+            href = a.get('href', '').strip()
+            raw_title = a.get_text(strip=True)
+            # 过滤短标题
+            if len(raw_title) < 8:
+                continue
+            # 过滤导航文字
+            if any(word in raw_title for word in ban_title_words):
+                continue
+            # 判断是否为文章链接
+            if not any(pat in href for pat in article_patterns):
+                continue
+            # 拼接完整链接
+            if href.startswith('/'):
+                full_url = BASE_URL + href
+            elif href.startswith('http'):
+                full_url = href
+            else:
+                continue
+            # 全局去重
+            if full_url in global_seen:
+                continue
+            global_seen.add(full_url)
+            # 繁转简标题，提前转换避免二次处理
+            clean_title = cc.convert(raw_title) if cc else raw_title
+            page_articles.append({"title": clean_title, "url": full_url})
+            print(f"    发现文章: {clean_title[:45]}...")
+
+        # 备用解析兜底
+        if len(page_articles) == 0:
+            print("  主解析无结果，启用备用提取规则")
+            for container in soup.find_all(['div', 'section', 'ul']):
+                for a in container.find_all('a', href=True):
+                    href = a.get('href', '').strip()
+                    raw_title = a.get_text(strip=True)
+                    if len(raw_title) < 10:
+                        continue
+                    if not href.startswith('/'):
+                        continue
+                    full_url = BASE_URL + href
+                    if full_url in global_seen:
+                        continue
+                    if any(pat in href for pat in ['article', 'news', 'column', 'politics', 'industry']):
+                        clean_title = cc.convert(raw_title) if cc else raw_title
+                        global_seen.add(full_url)
+                        page_articles.append({"title": clean_title, "url": full_url})
+                        print(f"    备用抓取: {clean_title[:45]}...")
+        return page_articles
+    except Exception as e:
+        print(f"  ❌ 栏目页面抓取异常: {str(e)}")
+        return []
+
+# 文章正文提取
+def extract_full_text(html):
+    soup = BeautifulSoup(html, 'html.parser')
+    # 清理干扰标签
+    for trash in soup(['script', 'style', 'nav', 'header', 'footer', 'aside', 'form', 'iframe', 'noscript']):
+        trash.decompose()
+    # 正文选择器优先级
+    selectors = [
+        'article', '.article-body', '.article-content', '#article-body',
+        '.detail-body', '.story-body', '.main-content', '.content'
+    ]
+    content_node = None
+    for sel in selectors:
+        content_node = soup.select_one(sel)
+        if content_node:
+            break
+    # 兜底取长段落
+    if not content_node:
+        all_p = soup.find_all('p')
+        long_paras = [p for p in all_p if len(p.get_text(strip=True)) > 30]
+        if len(long_paras) >= 3:
+            content_node = soup.new_tag('div')
+            for p in long_paras:
+                content_node.append(p)
+        else:
+            content_node = soup.body
+    # 拼接正文文本
+    paragraphs = content_node.find_all('p') if content_node else []
+    valid_texts = []
+    for p in paragraphs:
+        p_text = p.get_text(strip=True)
+        if len(p_text) > 25:
+            valid_texts.append(p_text)
+    full_text = "\n\n".join(valid_texts) if valid_texts else soup.get_text(strip=True)
+    # 统一换行、压缩空白
+    full_text = re.sub(r'\s+', ' ', full_text)
+    full_text = re.sub(r'\n\s*\n', '\n\n', full_text)
+    return full_text[:6000]
+
+# 主抓取逻辑
+def fetch_and_convert():
+    print("===== 开始抓取日经中文网 RSS =====")
+    # 栏目列表
+    crawl_urls = [
+        'https://cn.nikkei.com/',
+        'https://cn.nikkei.com/china/',
+        'https://cn.nikkei.com/politicsaeconomy/',
+        'https://cn.nikkei.com/industry/',
+        'https://cn.nikkei.com/columnviewpoint/',
+        'https://cn.nikkei.com/world/',
+        'https://cn.nikkei.com/tech/',
+        'https://cn.nikkei.com/economy/',
+    ]
+    all_article_list = []
+    seen_url_set = set()
+    # 遍历栏目抓取文章链接
+    for page_url in crawl_urls:
+        print(f"\n【栏目】{page_url}")
+        page_arts = extract_articles_from_page(page_url, seen_url_set)
+        all_article_list.extend(page_arts)
+        print(f" 当前累计文章总数: {len(all_article_list)}")
+        # 达到上限提前终止
+        if len(all_article_list) >= MAX_ARTICLE_NUM:
+            print(f"  已达到最大抓取数量 {MAX_ARTICLE_NUM}，停止遍历栏目")
+            break
+        time.sleep(PAGE_SLEEP)
+    print(f"\n链接抓取完成，共获取 {len(all_article_list)} 篇文章")
+    # 无文章时生成空RSS
+    if not all_article_list:
+        print("⚠ 未抓取到任何文章，生成空白RSS")
+        empty_xml = '<?xml version="1.0" encoding="UTF-8"?>\n'
+        empty_xml += '<rss version="2.0">\n<channel>\n'
+        empty_xml += '  <title>日经中文网 全文 RSS（简体）</title>\n'
+        empty_xml += '  <link>https://cn.nikkei.com/</link>\n'
+        empty_xml += '  <description>全文抓取、繁转简</description>\n'
+        empty_xml += f'  <lastBuildDate>{datetime.now(timezone.utc).strftime("%a, %d %b %Y %H:%M:%S GMT")}</lastBuildDate>\n'
+        empty_xml += '</channel>\n</rss>'
+        with open(OUTPUT_FILE, 'w', encoding='utf-8') as f:
+            f.write(empty_xml)
+        # 清理调试残留文件
+        if os.path.exists("debug_page.html"):
+            os.remove("debug_page.html")
+        return
+    # 限制最大条目
+    process_list = all_article_list[:MAX_ARTICLE_NUM]
+    rss_item_arr = []
+    # 逐条抓取正文
+    for idx, art in enumerate(process_list):
+        title = art["title"]
+        link = art["url"]
+        print(f"\n[{idx+1}/{len(process_list)}] 处理：{title[:50]}")
+        desc_text = f"原文链接：{link}"
+        try:
+            resp = fetch_with_retry(link)
+            if resp:
+                raw_content = extract_full_text(resp.text)
+                desc_text = cc.convert(raw_content) if cc else raw_content
+                print(f"  ✓ 正文长度：{len(desc_text)} 字符")
+            else:
+                print("  × 文章页面请求失败")
+        except Exception as e:
+            print(f"  × 文章解析异常: {str(e)}")
+        # 统一发布时间（无原生日期兜底）
+        item_pubdate = datetime.now(timezone.utc).strftime('%a, %d %b %Y %H:%M:%S GMT')
+        rss_item_arr.append({
+            "title": title,
+            "link": link,
+            "guid": link,
+            "pubDate": item_pubdate,
+            "desc": desc_text
+        })
+        time.sleep(ARTICLE_SLEEP)
+    # 组装完整RSS XML
+    xml_lines = [
+        '<?xml version="1.0" encoding="UTF-8"?>',
+        '<rss version="2.0">',
+        '<channel>',
+        '  <title>日经中文网 全文 RSS（简体）</title>',
+        '  <link>https://cn.nikkei.com/</link>',
+        '  <description>自动抓取日经中文网全文，繁体自动转为简体中文</description>',
+        f'  <lastBuildDate>{datetime.now(timezone.utc).strftime("%a, %d %b %Y %H:%M:%S GMT")}'
+    ]
+    # 循环写入item
+    for item in rss_item_arr:
+        xml_lines.append("  <item>")
+        xml_lines.append(f'    <title>{escape_xml(item["title"])}</title>')
+        xml_lines.append(f'    <link>{escape_xml(item["link"])}</link>')
+        xml_lines.append(f'    <guid>{escape_xml(item["guid"])}</guid>')
+        xml_lines.append(f'    <pubDate>{item["pubDate"]}</pubDate>')
+        safe_desc = cdata_clean(item["desc"])
+        xml_lines.append(f'    <description><![CDATA[{safe_desc}]]></description>')
+        xml_lines.append("  </item>")
+    xml_lines.extend(['</channel>', '</rss>'])
+    full_xml = "\n".join(xml_lines)
+    # 写入文件
+    with open(OUTPUT_FILE, 'w', encoding='utf-8') as f:
+        f.write(full_xml)
+    # 清理调试垃圾文件
+    if os.path.exists("debug_page.html"):
+        os.remove("debug_page.html")
+    print(f"\n✅ RSS生成完成！共 {len(rss_item_arr)} 篇文章，输出文件：{OUTPUT_FILE}")
+
+if __name__ == '__main__':
+    fetch_and_convert()
