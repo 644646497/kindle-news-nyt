@@ -1,23 +1,30 @@
-name: Send Nikkei News to Kindle
-
+name: Nikkei to Kindle
 on:
   schedule:
-    - cron: '0 21 * * *'   # 北京时间每天晚上21点
-  workflow_dispatch:
+    - cron: '0 21 * * *' # UTC21点 = 北京时间次日5点；如需北京时间21点改为 cron: '0 13 * * *'
+  workflow_dispatch: # 支持手动触发
 
 jobs:
   send:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - name: 拉取仓库代码
+        uses: actions/checkout@v4
 
-      - name: Install dependencies
+      - name: 安装Calibre+中文字体依赖
         run: |
           sudo apt-get update
           sudo apt-get install -y calibre fonts-noto-cjk
-          pip install opencc-python-reimplemented
+          pip3 install opencc-python-reimplemented
 
-      - name: Generate EPUB and Send to Kindle
+      - name: 生成EPUB电子书
+        run: |
+          ebook-convert nikkei.recipe nikkei_news.epub \
+            --output-profile kindle \
+            --no-chapters-in-toc \
+            --verbose
+
+      - name: 发送EPUB到Kindle邮箱
         env:
           FROM: ${{ secrets.FROM }}
           TO: ${{ secrets.TO }}
@@ -25,9 +32,7 @@ jobs:
           PORT: ${{ secrets.PORT }}
           SECRET: ${{ secrets.SECRET }}
         run: |
-          ebook-convert nikkei.recipe nikkei_news.epub --output-profile kindle --no-chapters-in-toc
-
-          python3 -c '
+          python3 << 'EOF'
 import smtplib, os
 from email.mime.multipart import MIMEMultipart
 from email.mime.base import MIMEBase
@@ -37,17 +42,25 @@ from datetime import datetime
 msg = MIMEMultipart()
 msg["From"] = os.environ["FROM"]
 msg["To"] = os.environ["TO"]
-msg["Subject"] = f"日经中文网 {datetime.now().strftime("%Y-%m-%d")}"
+today = datetime.now().strftime("%Y-%m-%d")
+msg["Subject"] = f"日经中文网 {today}"
 
+# 附加EPUB文件
 with open("nikkei_news.epub", "rb") as f:
     part = MIMEBase("application", "epub+zip")
     part.set_payload(f.read())
     encoders.encode_base64(part)
-    part.add_header("Content-Disposition", "attachment", filename="日经中文网.epub")
+    part.add_header(
+        "Content-Disposition",
+        "attachment",
+        filename=f"日经中文网_{today}.epub"
+    )
     msg.attach(part)
 
-with smtplib.SMTP_SSL(os.environ["SMTP"], int(os.environ["PORT"])) as server:
-    server.login(os.environ["FROM"], os.environ["SECRET"])
-    server.send_message(msg)
-print("推送完成")
-          '
+# SSL发送邮件
+server = smtplib.SMTP_SSL(os.environ["SMTP"], int(os.environ["PORT"]))
+server.login(os.environ["FROM"], os.environ["SECRET"])
+server.send_message(msg)
+server.quit()
+print(f"推送成功：{today} 日经电子书已发送至Kindle")
+EOF
