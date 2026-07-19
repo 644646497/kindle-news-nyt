@@ -11,8 +11,8 @@ import os
 # 全局配置
 OUTPUT_FILE = 'nikkei_feed.xml'
 MAX_ARTICLE_NUM = 30
-PAGE_SLEEP = 1.2
-ARTICLE_SLEEP = 0.8
+PAGE_SLEEP = 1.5
+ARTICLE_SLEEP = 1
 MAX_RETRY = 3
 
 # 初始化繁简转换
@@ -25,10 +25,9 @@ except Exception as e:
             return x
     cc = FakeCC()
 
-# 修复原域名笔误：cn.nikkei.com
 BASE_URL = 'https://cn.nikkei.com'
 
-# XML 转义函数（完整5种符号转义）
+# XML 转义函数
 def escape_xml(text):
     if not text:
         return ''
@@ -40,13 +39,13 @@ def escape_xml(text):
     s = s.replace("'", '&apos;')
     return s
 
-# CDATA 安全处理，避免]]>破坏XML
+# CDATA 安全处理
 def cdata_clean(text):
     if not text:
         return ""
     return str(text).replace("]]>", "]]&gt;")
 
-# 带重试的网页请求
+# 带重试网页请求
 def fetch_with_retry(url, max_retries=MAX_RETRY):
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
@@ -69,32 +68,36 @@ def fetch_with_retry(url, max_retries=MAX_RETRY):
             time.sleep(2)
     return None
 
-# 抓取栏目文章列表
+# 【修复核心】新版页面新闻提取函数
 def extract_article_list(url, global_seen):
     html = fetch_with_retry(url)
     if not html:
         return []
     soup = BeautifulSoup(html, 'html.parser')
     page_articles = []
-    # 过滤导航无用词
-    ban_words = ['首页', '新闻', '专栏', '搜索', '登录', '注册', '更多', '评论', '专题', '菜单', '返回']
-    # 匹配新闻链接
-    links = soup.find_all('a', href=True)
-    for a in links:
-        href = a['href'].strip()
-        title_raw = a.get_text(strip=True)
-        if len(title_raw) < 8:
+    # 缩小黑名单，只过滤导航专用词
+    ban_words = ['登录', '注册', '首页导航', '网站导航']
+
+    # 方案：优先抓取带新闻标题class的容器（日经新版页面）
+    news_containers = soup.find_all(class_=re.compile("title|news-item|article"))
+    for container in news_containers:
+        a_tag = container.find('a', href=True)
+        if not a_tag:
+            continue
+        href = a_tag['href'].strip()
+        title_raw = a_tag.get_text(strip=True)
+        # 放宽标题长度限制，短资讯也保留
+        if len(title_raw) < 4:
             continue
         if any(word in title_raw for word in ban_words):
             continue
-        # 补全完整链接
+        # 拼接完整链接
         if href.startswith('/'):
             full_link = BASE_URL + href
-        elif href.startswith('http'):
+        elif href.startswith('http') and BASE_URL in href:
             full_link = href
         else:
             continue
-        # 去重
         if full_link in global_seen:
             continue
         global_seen.add(full_link)
@@ -102,6 +105,32 @@ def extract_article_list(url, global_seen):
         page_articles.append({"title": title_cn, "url": full_link})
         if len(page_articles) >= MAX_ARTICLE_NUM:
             break
+
+    # 兜底：容器匹配失败则遍历全部a标签
+    if len(page_articles) == 0:
+        all_links = soup.find_all('a', href=True)
+        for a in all_links:
+            href = a['href'].strip()
+            title_raw = a.get_text(strip=True)
+            if len(title_raw) < 6:
+                continue
+            if any(word in title_raw for word in ban_words):
+                continue
+            if "/article/" not in href and "/news/" not in href:
+                continue
+            if href.startswith('/'):
+                full_link = BASE_URL + href
+            elif href.startswith('http') and BASE_URL in href:
+                full_link = href
+            else:
+                continue
+            if full_link in global_seen:
+                continue
+            global_seen.add(full_link)
+            title_cn = cc.convert(title_raw)
+            page_articles.append({"title": title_cn, "url": full_link})
+            if len(page_articles) >= MAX_ARTICLE_NUM:
+                break
     return page_articles
 
 # 抓取单篇正文
@@ -111,7 +140,7 @@ def get_article_content(url):
         return "原文读取失败，请访问链接查看完整内容：" + url
     soup = BeautifulSoup(html, 'html.parser')
     # 清除无关标签
-    for tag in soup(["script", "style", "iframe", "nav", "footer", "aside"]):
+    for tag in soup(["script", "style", "iframe", "nav", "footer", "aside", "header"]):
         tag.decompose()
     # 提取正文区域
     content_blocks = soup.find_all('p')
@@ -121,9 +150,10 @@ def get_article_content(url):
         if len(para) > 10:
             para_cn = cc.convert(para)
             content_text += para_cn + "\n\n"
+    # 兜底全文
     if len(content_text) < 50:
         content_text = soup.get_text(strip=True)
-    # 截断长度适配Kindle推送
+    # Kindle长度限制截断
     if len(content_text) > 6000:
         content_text = content_text[:5900] + "...（内容过长已截断，原文链接：" + url + "）"
     return content_text
@@ -131,7 +161,6 @@ def get_article_content(url):
 # 主生成逻辑
 def fetch_and_build_rss():
     print("===== 开始抓取日经中文网 RSS（适配Kindle推送） =====")
-    # 抓取栏目列表
     crawl_pages = [
         BASE_URL,
         BASE_URL + "/china/",
@@ -149,7 +178,6 @@ def fetch_and_build_rss():
         time.sleep(PAGE_SLEEP)
         if len(all_articles) >= MAX_ARTICLE_NUM:
             break
-    # 截取最多30篇
     all_articles = all_articles[:MAX_ARTICLE_NUM]
     print(f"\n共获取 {len(all_articles)} 篇新闻，开始抓取正文...")
     rss_items = []
@@ -158,7 +186,6 @@ def fetch_and_build_rss():
         print(f"[{idx+1}/{len(all_articles)}] 抓取：{art['title']}")
         content = get_article_content(art['url'])
         time.sleep(ARTICLE_SLEEP)
-        # 组装item xml
         item_xml = f"""
 <item>
 <title>{escape_xml(art['title'])}</title>
@@ -168,7 +195,6 @@ def fetch_and_build_rss():
 </item>
 """
         rss_items.append(item_xml)
-    # 完整RSS模板
     full_rss = f"""<?xml version="1.0" encoding="UTF-8"?>
 <rss version="2.0">
 <channel>
@@ -180,10 +206,8 @@ def fetch_and_build_rss():
 </channel>
 </rss>
 """
-    # 写入文件
     with open(OUTPUT_FILE, 'w', encoding='utf-8') as f:
         f.write(full_rss)
-    # 清理调试文件
     if os.path.exists("debug_page.html"):
         os.remove("debug_page.html")
     print(f"\n✅ RSS生成完成！输出文件：{OUTPUT_FILE}，可直接用于Kindle推送")
