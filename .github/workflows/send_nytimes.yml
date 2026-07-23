@@ -1,6 +1,6 @@
 name: Send NYTimes News to Kindle
 
-on:
+#on:
   schedule:
     - cron: '0 21 * * *'
   workflow_dispatch:
